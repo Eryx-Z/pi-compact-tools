@@ -1,4 +1,16 @@
 {
+  "0.18.0": {
+    "New": [
+      "Streamline tool styles to Claude and Off, migrating legacy compact/codex settings automatically to claude.",
+      "Add semantic syntax and keyword highlighting for Bash/PowerShell call titles and tool output (commands, flags, redirects, env assignments, paths, banners, INI sections, key-value pairs, and status keywords).",
+      "Tune chrome, completion metadata, running indicator pulse, and codemode nested-count contrast bands for dark themes."
+    ],
+    "Fix": [
+      "Require symmetric closing markers on output banners and avoid misclassifying unified diff headers, Go test lines, or horizontal rules.",
+      "Preserve command-name highlighting after leading redirects and quoted/variable environment assignments, and avoid splitting URLs, == comparisons, or English contractions."
+    ],
+    "Deprecated": []
+  },
   "0.17.0": {
     "New": [
       "Use Pi 1.5's native Extension Updates changelog, including seen-version tracking and collapseChangelog; older hosts keep the existing release notice.",

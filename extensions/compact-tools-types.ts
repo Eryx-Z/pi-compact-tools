@@ -4,7 +4,6 @@ export const SUPPORTED_TOOLS = ["read", "write", "edit", "bash", "powershell", "
 export const SUPPORTED_TOOL_SET = new Set<string>(SUPPORTED_TOOLS);
 
 export type CompactToolName = (typeof SUPPORTED_TOOLS)[number];
-export type ShellToolName = "bash" | "powershell";
 export type ToolArgs = Record<string, unknown>;
 export type BuiltInDefinition = ToolDefinition<any, any, any>;
 

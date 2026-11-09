@@ -184,23 +184,6 @@ export function prefixedText(text: string, firstPrefix: string, continuationPref
 }
 
 /**
- * Lines under a tree prefix. With `truncate`, each keeps to one row and ends in an
- * ellipsis, the way Claude Code previews; otherwise each wraps in full. Lines are
- * handled one by one, so the indentation that output starts with survives.
- */
-export function prefixedLines(text: string, firstPrefix: string, continuationPrefix: string, truncate: boolean): Component {
-	const prefixWidth = Math.max(visibleWidth(firstPrefix), visibleWidth(continuationPrefix));
-	const lines = text.replace(/\t/g, "   ").split("\n");
-	return new CachedComponent((width) => {
-		const available = Math.max(1, width - prefixWidth);
-		const rows = truncate
-			? lines.map((line) => truncateToWidth(line, available, "…"))
-			: lines.flatMap((line) => hardWrapTextWithAnsi(line, available));
-		return rows.map((row, index) => `${index === 0 ? firstPrefix : continuationPrefix}${row}`);
-	});
-}
-
-/**
  * A sentence under a tree prefix, wrapped at words as a terminal UI wraps prose:
  * a word moves to the next row whole, and only a word longer than a row is split.
  */
