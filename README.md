@@ -67,7 +67,7 @@ Optional: `~/.pi/agent/compact-tools.json` or `<project>/.pi/compact-tools.json`
 }
 ```
 
-Add tool names to `custom_tools.exclude` to keep their own rendering. All options are described in `schemas/compact-tools.schema.json`.
+Supported built-in `tools`: `read`, `write`, `edit`, `bash`, `powershell`, `grep`, `find`, and `ls` (default: `["read", "write", "edit", "bash"]`). Add tool names to `custom_tools.exclude` to keep their own rendering. All options are described in `schemas/compact-tools.schema.json`.
 
 ## License
 

@@ -4,7 +4,6 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 	Theme,
-	ToolDefinition,
 	ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
@@ -30,7 +29,6 @@ import {
 	LiveCallContainer,
 	limitComponentLines,
 	prefixedSentence,
-	prefixedText,
 	railComponent,
 	withOutputPad,
 	renderArguments,
@@ -68,6 +66,7 @@ import { ViewportKeeper } from "./compact-tools-viewport.ts";
 import {
 	SUPPORTED_TOOL_SET,
 	toolExpandKey,
+	type BuiltInDefinition,
 	type CompactToolName,
 	type RenderContext,
 	type RowState,
@@ -155,22 +154,17 @@ function rememberResult(state: RowState, result: AgentToolResult<unknown>, optio
 function renderControls(
 	theme: Theme,
 	state: RowState,
-	running: boolean,
 	isError: boolean,
-	nestedSummary?: string,
-	prefix = CLAUDE_INDENT,
-	indent = CLAUDE_INDENT,
+	nestedSummary: string,
 ): Component {
-	const duration = running ? undefined : formatDuration(state);
-	const status = running
-		? (duration ?? "Running")
-		: `${isError ? "Failed" : "Done"}${duration ? ` in ${duration}` : ""}`;
+	const duration = formatDuration(state);
+	const status = `${isError ? "Failed" : "Done"}${duration ? ` in ${duration}` : ""}`;
 	const chrome = chromePainter(theme);
-	const metadata = running ? chrome : completionPainter(theme);
+	const metadata = completionPainter(theme);
 	let details = metadata(status);
-	if (state.resultLineSummary && !running && !isError) details += metadata(` (${state.resultLineSummary})`);
-	if (nestedSummary && !running) details += chrome(" · ") + nestedSummary;
-	return nestedSummary ? prefixedSentence(details, chrome(prefix), indent, true) : prefixedText(details, chrome(prefix), indent);
+	if (state.resultLineSummary && !isError) details += metadata(` (${state.resultLineSummary})`);
+	details += chrome(" · ") + nestedSummary;
+	return prefixedSentence(details, chrome(CLAUDE_INDENT), CLAUDE_INDENT, true);
 }
 
 function hasNestedArguments(args: ToolArgs): boolean {
@@ -225,24 +219,18 @@ function renderFileBody(
 }
 
 function renderRowBody(
-	name: string,
-	args: ToolArgs,
-	result: AgentToolResult<unknown>,
 	output: string,
 	expanded: boolean,
 	theme: Theme,
 	isError: boolean,
-	author: AuthorResultRenderer | undefined,
+	author: AuthorResultRenderer,
 	rail?: string,
 ): Component | undefined {
-	if (!author && rowKind(name) !== "custom") return renderFileBody(name, args, result, output, theme, isError, rail);
-	if (author) {
-		try {
-			const component = author(expanded);
-			if (component) return railComponent(component, theme, rail);
-		} catch {
-			// A failing third-party renderer degrades to the plain text result.
-		}
+	try {
+		const component = author(expanded);
+		if (component) return railComponent(component, theme, rail);
+	} catch {
+		// A failing third-party renderer degrades to the plain text result.
 	}
 	return renderOutput(output, theme, isError, rail);
 }
@@ -270,7 +258,7 @@ function claudeBody(
 	author: AuthorResultRenderer | undefined,
 	expandKey: string,
 ): Component | undefined {
-	if (author && expanded) return renderRowBody(name, args, result, output, true, theme, false, author, CLAUDE_INDENT);
+	if (author && expanded) return renderRowBody(output, true, theme, false, author, CLAUDE_INDENT);
 	const path = pathArgument(args);
 	if (name === "edit") {
 		return renderCodeDiff(getEditPatch(result), getEditDiff(result), path, theme,
@@ -284,7 +272,7 @@ function claudeBody(
 	}
 	const kind = rowKind(name);
 	if (!expanded || kind === "shell" || name === "read") return undefined;
-	if (kind === "custom") return author ? renderRowBody(name, args, result, output, true, theme, false, author, CLAUDE_INDENT) : undefined;
+	if (kind === "custom") return undefined;
 	return renderFileBody(name, args, result, output, theme, false, CLAUDE_INDENT);
 }
 
@@ -353,10 +341,10 @@ function renderRowResult(
 		state.resultLineSummary = output ? formatResultLineSummary(name, ctx.args, result, output) : undefined;
 		state.resultLineSummaryComputed = true;
 	}
-	const container = new CachedContainer();
-	const completion = nestedSummary ? renderControls(theme, state, false, ctx.isError, nestedSummary, CLAUDE_INDENT, CLAUDE_INDENT) : undefined;
-	container.addChild(renderClaudeResult(name, ctx.args, result, options, theme, ctx.isError, state.expanded === true, output, author, completion, toolExpandKey(ctx)));
-	const component = new WithinWidth(container);
+	const completion = nestedSummary ? renderControls(theme, state, ctx.isError, nestedSummary) : undefined;
+	const component = new WithinWidth(
+		renderClaudeResult(name, ctx.args, result, options, theme, ctx.isError, state.expanded === true, output, author, completion, toolExpandKey(ctx)),
+	);
 	rememberResult(state, result, options, ctx.isError, theme);
 	state.lastResultDurationMs = state.durationMs;
 	state.lastResultOutputPad = ctx.outputPad;
@@ -378,7 +366,7 @@ function renderRowResult(
 }
 
 let authorStates = new WeakMap<object, { state: RowState; component?: Component }>();
-function createCustomRenderers(name: string, author: ToolDefinition<any, any, any> | undefined): RowRenderers {
+function createCustomRenderers(name: string, author: BuiltInDefinition | undefined): RowRenderers {
 	const slot = (ctx: RenderContext<any>) => {
 		let value = authorStates.get(ctx.state);
 		if (!value) authorStates.set(ctx.state, value = { state: {} });
@@ -433,13 +421,13 @@ function resolveCustomRow(row: ToolRow): RowRenderers | undefined {
 }
 
 type RendererAPI = ExtensionAPI & {
-	registerToolRenderer?: (resolver: (name: string, next: () => ToolDefinition<any, any, any> | undefined) => ToolDefinition<any, any, any> | undefined) => void;
+	registerToolRenderer?: (resolver: (name: string, next: () => BuiltInDefinition | undefined) => BuiltInDefinition | undefined) => void;
 };
 let publicRendering = false;
 let sessionReady = false;
-let publicBases = new WeakMap<object, ToolDefinition<any, any, any> | undefined>();
+let publicBases = new WeakMap<object, BuiltInDefinition | undefined>();
 let publicOwners = new WeakMap<object, { call?: unknown; result?: unknown }>();
-function publicRowDefinition(name: string, base: ToolDefinition<any, any, any> | undefined): ToolDefinition<any, any, any> | undefined {
+function publicRowDefinition(name: string, base: BuiltInDefinition | undefined): BuiltInDefinition | undefined {
 	let config: unknown;
 	let decision: RowRenderers | undefined;
 	const decide = () => {
@@ -469,7 +457,7 @@ function publicRowDefinition(name: string, base: ToolDefinition<any, any, any> |
 		get renderShell() { return decide() ? "self" : base?.renderShell ?? "default"; },
 		get renderCall() { return decide()?.renderCall || base?.renderCall ? call : undefined; },
 		get renderResult() { return decide()?.renderResult || base?.renderResult ? result : undefined; },
-	} as ToolDefinition<any, any, any>;
+	} as BuiltInDefinition;
 	publicBases.set(definition, base);
 	return definition;
 }
@@ -483,7 +471,7 @@ function invalidateRowDecisions(failures: UIFailure[]): void {
 	refreshTranscriptRows?.(failures);
 }
 
-function configure(_pi: ExtensionAPI, cwd?: string, projectTrusted = false, failures: UIFailure[] = []): void {
+function configure(cwd?: string, projectTrusted = false, failures: UIFailure[] = []): void {
 	const resolvedCwd = cwd ?? process.cwd();
 	const config = loadConfig(resolvedCwd, projectTrusted);
 	const signature = JSON.stringify([resolvedCwd, config]);
@@ -537,7 +525,7 @@ export default function compactTools(pi: ExtensionAPI): void {
 		setRowResolver(undefined);
 		rendererAPI.registerToolRenderer!((name, next) => {
 			const base = next();
-			return publicRowDefinition(name, base as ToolDefinition<any, any, any> | undefined);
+			return publicRowDefinition(name, base as BuiltInDefinition | undefined);
 		});
 	} else invalidateRowDecisions([]);
 	const transcript = createTranscriptRenderer({
@@ -587,7 +575,7 @@ export default function compactTools(pi: ExtensionAPI): void {
 	});
 	const cwd = process.cwd();
 	const lastTrust = (globalThis as TrustSlot)[TRUST_KEY];
-	configure(pi, cwd, lastTrust?.cwd === realDirectory(cwd) && lastTrust.trusted);
+	configure(cwd, lastTrust?.cwd === realDirectory(cwd) && lastTrust.trusted);
 	pi.on("session_start", () => loadNativeTimerRenderers());
 	pi.on("session_start", (event, ctx) => {
 		const failures: UIFailure[] = [];
@@ -602,7 +590,7 @@ export default function compactTools(pi: ExtensionAPI): void {
 		if (typeof ctx.isIdle === "function") runtime.setBusy(!ctx.isIdle());
 		const trusted = ctx.isProjectTrusted();
 		(globalThis as TrustSlot)[TRUST_KEY] = { cwd: realDirectory(ctx.cwd), trusted };
-		configure(pi, ctx.cwd, trusted, failures);
+		configure(ctx.cwd, trusted, failures);
 		sessionReady = true;
 		if (ctx.mode === "tui" && runtime.config.style !== "off") {
 			enableUI(ctx, event.reason === "reload", false, failures);
@@ -616,10 +604,23 @@ export default function compactTools(pi: ExtensionAPI): void {
 		}
 		reportFailures(ctx, failures);
 	});
+	pi.on("session_compact", (_event, ctx) => {
+		const failures: UIFailure[] = [];
+		const uiContext = ctx ?? sessionContext;
+		if (runtime.config.style !== "off") transcript.refresh(failures);
+		else if (uiContext?.mode === "tui") transcript.reconcileOnce(uiContext, failures);
+		reportFailures(uiContext, failures);
+	});
 	pi.on("session_tree", (_event, ctx) => {
-		const branch = ctx.sessionManager?.getBranch?.();
+		const failures: UIFailure[] = [];
+		nestedSummaries.clear();
+		const branch = ctx?.sessionManager?.getBranch?.();
 		if (Array.isArray(branch)) nestedSummaries.restoreBranch(branch);
+		const uiContext = ctx ?? sessionContext;
+		if (runtime.config.style !== "off") transcript.refresh(failures);
+		else if (uiContext?.mode === "tui") transcript.reconcileOnce(uiContext, failures);
 		runtime.repaint();
+		reportFailures(uiContext, failures);
 	});
 	pi.on("agent_start", () => runtime.setBusy(true));
 	pi.on("agent_end", () => runtime.setBusy(false));
@@ -628,7 +629,7 @@ export default function compactTools(pi: ExtensionAPI): void {
 		if (nestedSummaries.restore(event.message)) runtime.repaint();
 	});
 	pi.on("tool_execution_start", (event) => {
-		if (madeByTool(event)) {
+		if (madeByTool(event) && nestedSummaries.owns(event)) {
 			nestedSummaries.note(event, false);
 			return;
 		}
@@ -637,7 +638,7 @@ export default function compactTools(pi: ExtensionAPI): void {
 		runtime.noteExecutionStart(event.toolCallId);
 	});
 	pi.on("tool_execution_end", (event) => {
-		if (madeByTool(event)) {
+		if (madeByTool(event) && nestedSummaries.owns(event)) {
 			if (nestedSummaries.note(event, true)) runtime.repaint();
 			return;
 		}

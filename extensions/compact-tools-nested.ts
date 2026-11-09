@@ -7,7 +7,7 @@ const MAX_PARENTS = 2_000;
 const MAX_CALLS = 256;
 const MAX_NAME_LENGTH = 256;
 const MAX_ID_LENGTH = 1_024;
-type Status = "ok" | "error" | "unfinished";
+type Status = "ok" | "error" | "failed" | "unfinished";
 type Call = { name: string; status: Status };
 type Summary = { calls: Map<string, Call>; partial: boolean; finished: boolean; live: boolean; revision: object };
 type Shared = typeof globalThis & { [SUMMARY_KEY]?: Map<string, Summary> };
@@ -36,6 +36,9 @@ export class NestedCallSummaries {
 	finish(id: string): void {
 		const summary = this.summaries.get(id);
 		if (summary) {
+			for (const call of summary.calls.values()) {
+				if (call.status === "unfinished") call.status = "failed";
+			}
 			summary.finished = true;
 			summary.revision = {};
 		}
@@ -56,6 +59,13 @@ export class NestedCallSummaries {
 			id = id.slice(0, slash);
 		}
 		return undefined;
+	}
+
+	/** Whether the event belongs to a tracked codemode root. */
+	owns(event: NestedEvent): boolean {
+		if (typeof event.parentToolCallId !== "string" || event.parentToolCallId.length > MAX_ID_LENGTH) return false;
+		const root = this.root(event.parentToolCallId);
+		return root !== undefined && this.summaries.has(root);
 	}
 
 	/** Returns true only when a finished parent needs a fresh terminal frame. */
@@ -101,7 +111,7 @@ export class NestedCallSummaries {
 			const call = item as { id?: unknown; name?: unknown; status?: unknown };
 			if (typeof call.id !== "string" || typeof call.name !== "string"
 				|| call.id.length > MAX_ID_LENGTH || call.name.length > MAX_NAME_LENGTH
-				|| (call.status !== "ok" && call.status !== "error" && call.status !== "unfinished")) { summary.partial = true; continue; }
+				|| (call.status !== "ok" && call.status !== "error" && call.status !== "failed" && call.status !== "unfinished")) { summary.partial = true; continue; }
 			if (!summary.calls.has(call.id) && summary.calls.size >= MAX_CALLS) { summary.partial = true; break; }
 			summary.calls.set(call.id, { name: call.name, status: call.status as Status });
 		}
@@ -145,7 +155,7 @@ export class NestedCallSummaries {
 			const name = stripTerminalSequences(group.name).replace(/[\x00-\x20\x7f-\x9f]/gu, " ").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/gu, "").trim() || "tool";
 
 			const successes = group.calls.filter((call) => call.status === "ok").length;
-			const failures = group.calls.filter((call) => call.status === "error").length;
+			const failures = group.calls.filter((call) => call.status === "error" || call.status === "failed").length;
 			const unfinished = group.calls.filter((call) => call.status === "unfinished").length;
 			const counts = [successes ? success(String(successes)) : "",
 				failures ? error(String(failures)) : ""].filter(Boolean);

@@ -6,7 +6,7 @@ import type { ToolArgs } from "./compact-tools-types.ts";
 /** Historical/transcribed read arguments may contain numeric strings or null. Display only. */
 export function readStartLine(value: unknown): number {
 	if (typeof value === "string" && value.trim() !== "") value = Number(value);
-	return typeof value === "number" && Number.isFinite(value) ? value : 1;
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 ? value : 1;
 }
 
 const CUSTOM_SUMMARY_KEYS = [
@@ -15,19 +15,39 @@ const CUSTOM_SUMMARY_KEYS = [
 ];
 const CUSTOM_SUMMARY_MAX_LENGTH = 160;
 
-function summaryValue(value: unknown): string | undefined {
+function summaryObject(record: Readonly<Record<string, unknown>>): string | undefined {
+	for (const key of CUSTOM_SUMMARY_KEYS) {
+		if (!(key in record)) continue;
+		const nested = summaryValue(record[key], false);
+		if (nested?.trim()) return nested;
+	}
+	return undefined;
+}
+
+function summaryValue(value: unknown, allowNested = true): string | undefined {
 	if (typeof value === "string") return value;
 	if (typeof value === "number" || typeof value === "boolean") return String(value);
 	if (Array.isArray(value)) {
-		const parts = value.filter((item) => typeof item === "string" || typeof item === "number").map(String);
+		const parts: string[] = [];
+		for (const item of value) {
+			if (typeof item === "string" || typeof item === "number") {
+				if (String(item).trim()) parts.push(String(item));
+			} else if (allowNested && item !== null && typeof item === "object" && !Array.isArray(item)) {
+				const nested = summaryObject(item as Readonly<Record<string, unknown>>);
+				if (nested?.trim()) parts.push(nested);
+			}
+		}
 		return parts.length > 0 ? parts.join(", ") : undefined;
+	}
+	if (allowNested && value !== null && typeof value === "object") {
+		return summaryObject(value as Readonly<Record<string, unknown>>);
 	}
 	return undefined;
 }
 
 /** One line describing a custom tool call; the full arguments stay available when expanded. */
 export function summarizeCustomArguments(args: ToolArgs): string {
-	const keys = [...CUSTOM_SUMMARY_KEYS.filter((key) => key in args), ...Object.keys(args)];
+	const keys = new Set([...CUSTOM_SUMMARY_KEYS.filter((key) => key in args), ...Object.keys(args)]);
 	for (const key of keys) {
 		const value = summaryValue(args[key]);
 		if (!value?.trim()) continue;
@@ -107,10 +127,14 @@ export function getEditPatch(result: AgentToolResult<unknown>): string {
 	return typeof patch === "string" ? normalizeLineEndings(patch).trimEnd() : "";
 }
 
+function isDiffHeaderLine(line: string): boolean {
+	return line.startsWith("+++ ") || line.startsWith("--- ");
+}
+
 export function getEditChanges(result: AgentToolResult<unknown>): string {
 	return getEditDiff(result)
 		.split("\n")
-		.filter((line) => line.startsWith("-") || line.startsWith("+"))
+		.filter((line) => (line.startsWith("-") || line.startsWith("+")) && !isDiffHeaderLine(line))
 		.join("\n")
 		.trimEnd();
 }
@@ -121,6 +145,7 @@ export function countEditChanges(result: AgentToolResult<unknown>): { added: num
 	let added = 0;
 	let removed = 0;
 	for (const line of diff.split("\n")) {
+		if (isDiffHeaderLine(line)) continue;
 		if (line.startsWith("+")) added++;
 		else if (line.startsWith("-")) removed++;
 	}

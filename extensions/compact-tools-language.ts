@@ -109,15 +109,23 @@ function stripVersion(interpreter: string): string {
 	return interpreter.replace(/[\d.]+$/u, "");
 }
 
+const ENV_ARG_FLAGS = new Set(["-u", "-C", "--unset", "--chdir"]);
+
 /** Read the language a `#!` line declares, e.g. `#!/usr/bin/env -S python3 -u`. */
 export function languageFromShebang(line: string): string | undefined {
-	const shebang = line.match(/^#!\s*(\S+)((?:\s+\S+)*)$/u);
-	if (!shebang) return undefined;
-	const command = basename(shebang[1]!).toLowerCase();
+	if (!line.startsWith("#!")) return undefined;
+	const tokens = line.slice(2).trim().split(/\s+/u).filter(Boolean);
+	if (tokens.length === 0) return undefined;
+	const command = basename(tokens[0]!).toLowerCase();
 	if (command !== "env") return INTERPRETER_LANGUAGES[stripVersion(command)];
 	// `env` forwards to the first argument that is not one of its own flags.
-	for (const argument of shebang[2]!.trim().split(/\s+/u)) {
-		if (!argument || argument.startsWith("-") || argument.includes("=")) continue;
+	for (let index = 1; index < tokens.length; index++) {
+		const argument = tokens[index]!;
+		if (ENV_ARG_FLAGS.has(argument)) {
+			index++;
+			continue;
+		}
+		if (argument.startsWith("-") || argument.includes("=")) continue;
 		return INTERPRETER_LANGUAGES[stripVersion(basename(argument).toLowerCase())];
 	}
 	return undefined;

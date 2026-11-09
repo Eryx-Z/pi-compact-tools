@@ -5,7 +5,7 @@ import {
 	type ExtensionContext,
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Spacer, Text, truncateToWidth, type Component } from "@earendil-works/pi-tui";
+import { Container, Spacer, truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { CLAUDE_RESULT_PREFIX, claudeFailure, lookHint, lookKind, pathOf, type LookKind } from "./compact-tools-claude.ts";
 import { formatDurationMs, type RowStatus } from "./compact-tools-core.ts";
 import { hookMethod } from "./compact-tools-hook.ts";
@@ -57,6 +57,10 @@ function argsOf(row: ToolRowLike): ToolArgs {
 const kinds = new WeakMap<object, { args: unknown; kind: LookKind | undefined }>();
 
 function kindOf(row: ToolRowLike): LookKind | undefined {
+	if (row.isPartial) {
+		if (row.toolName === "bash" || row.toolName === "powershell") return undefined;
+		return lookKind(row.toolName, argsOf(row));
+	}
 	const cached = kinds.get(row);
 	if (cached && cached.args === row.args) return cached.kind;
 	const kind = lookKind(row.toolName, argsOf(row));
@@ -77,11 +81,14 @@ export function countGroup(rows: readonly ToolRowLike[]): Record<LookKind, numbe
 	let readCommands = 0;
 	for (const row of rows) {
 		const kind = kindOf(row);
-		if (kind === "read" && row.toolName === "read") paths.add(pathOf(argsOf(row)));
-		else if (kind === "read") readCommands++;
+		if (kind === "read" && row.toolName === "read") {
+			const p = pathOf(argsOf(row));
+			if (p) paths.add(p);
+			else readCommands++;
+		} else if (kind === "read") readCommands++;
 		else if (kind) counts[kind]++;
 	}
-	counts.read = paths.size > 0 ? paths.size : readCommands;
+	counts.read = paths.size + readCommands;
 	return counts;
 }
 
@@ -120,6 +127,7 @@ type HeaderCache = {
 	rows: readonly ToolRowLike[];
 	args: unknown[];
 	results: unknown[];
+	statuses: readonly RowStatus[];
 	lines: string[];
 };
 
@@ -128,11 +136,23 @@ type Paint = { theme: Theme; chrome: (text: string) => string; key: string };
 
 const PAINT_COLORS = ["toolTitle", "error", "success", "muted", "dim", "text", "borderMuted", "accent"] as const;
 
-function headerStill(cache: HeaderCache, rows: readonly ToolRowLike[], paint: string, width: number, expanded: boolean): boolean {
+function isHostExpanded(rows: readonly ToolRowLike[]): boolean {
+	return Boolean(rows[0]?.expanded) && rows.every((row) => Boolean(row.expanded));
+}
+
+function headerStill(
+	cache: HeaderCache,
+	rows: readonly ToolRowLike[],
+	statuses: readonly RowStatus[],
+	paint: string,
+	width: number,
+	expanded: boolean,
+	hostExpanded: boolean,
+): boolean {
 	if (cache.paint !== paint || cache.width !== width || cache.expanded !== expanded
-		|| cache.hostExpanded !== rows[0]?.expanded || cache.rows.length !== rows.length) return false;
+		|| cache.hostExpanded !== hostExpanded || cache.rows.length !== rows.length) return false;
 	return rows.every((row, index) => row === cache.rows[index] && row.args === cache.args[index]
-		&& row.result === cache.results[index]);
+		&& row.result === cache.results[index] && statuses[index] === cache.statuses[index]);
 }
 
 export class ToolGroupComponent extends Container {
@@ -144,7 +164,7 @@ export class ToolGroupComponent extends Container {
 		private readonly onToggle: (expanded: boolean) => void,
 	) {
 		super();
-		const hostExpanded = rows[0]!.expanded;
+		const hostExpanded = isHostExpanded(rows);
 		if (state.lastHostExpanded !== hostExpanded) {
 			state.lastHostExpanded = hostExpanded;
 			state.expanded = hostExpanded;
@@ -167,16 +187,24 @@ function isGroupable(child: unknown): child is ToolRowLike {
 	return kindOf(child as ToolRowLike) !== undefined;
 }
 
-type AssistantLike = { lastMessage?: { content?: Array<{ type: string; text?: string }> } };
+type AssistantLike = {
+	lastMessage?: {
+		stopReason?: string;
+		content?: Array<{ type: string; text?: string }>;
+	};
+};
 
 function isThinkingOnly(child: unknown): boolean {
 	if (!isKind(child, AssistantMessageComponent)) return false;
-	const content = (child as AssistantLike).lastMessage?.content ?? [];
+	const assistant = child as AssistantLike;
+	const stopReason = assistant.lastMessage?.stopReason;
+	if (stopReason === "error" || stopReason === "aborted" || stopReason === "length") return false;
+	const content = assistant.lastMessage?.content ?? [];
 	return !content.some((block) => block.type === "text" && block.text?.trim());
 }
 
 function isFoldable(child: unknown): boolean {
-	return isThinkingOnly(child) || isKind(child, Text) || isKind(child, Spacer);
+	return isThinkingOnly(child) || isKind(child, Spacer);
 }
 
 export function groupChildren(
@@ -214,6 +242,7 @@ export function groupChildren(
 
 export class ToolGroupController {
 	private context: ExtensionContext | undefined;
+	private unhookChat: (() => void) | undefined;
 	private readonly states = new WeakMap<object, GroupState>();
 	private paint: Paint | undefined;
 	private readonly canRun: CanRun = (row) => this.runtime.canRun(row.toolCallId);
@@ -226,7 +255,7 @@ export class ToolGroupController {
 		ctx.ui.setWidget(WIDGET_KEY, (tui) => {
 			const chat = findChat(tui);
 			if (chat) {
-				hookMethod(chat, "render", "claude.groups", (self, args, original) => {
+				this.unhookChat = hookMethod(chat, "render", "claude.groups", (self, args, original) => {
 					if (!this.context || isSilent() || this.runtime.config.style !== "claude") return original.apply(self, args);
 					const children = self.children as unknown[];
 					this.paint = this.resolvePaint();
@@ -237,7 +266,7 @@ export class ToolGroupController {
 						self.children = children;
 						this.paint = undefined;
 					}
-				});
+				}) || undefined;
 			}
 			return { render: () => [], invalidate() {} };
 		}, { placement: "belowEditor" });
@@ -246,14 +275,17 @@ export class ToolGroupController {
 	dispose(): void {
 		const context = this.context;
 		this.context = undefined;
+		this.unhookChat?.();
+		this.unhookChat = undefined;
 		context?.ui.setWidget(WIDGET_KEY, undefined, { placement: "belowEditor" });
 	}
 
 	private makeGroup(rows: ToolRowLike[], members: unknown[], tui: { requestRender(): void }): Component {
 		const key = rows[0]!;
+		const hostExpanded = isHostExpanded(rows);
 		let state = this.states.get(key);
 		if (!state) {
-			state = { expanded: key.expanded, lastHostExpanded: key.expanded };
+			state = { expanded: hostExpanded, lastHostExpanded: hostExpanded };
 			this.states.set(key, state);
 		}
 		const groupState = state;
@@ -275,24 +307,29 @@ export class ToolGroupController {
 	private drawCached(rows: readonly ToolRowLike[], width: number, expanded: boolean, state: GroupState): string[] {
 		const paint = this.paint ?? this.resolvePaint();
 		if (!paint) return [];
-		if (lastRunning(rows, this.canRun)) return this.draw(rows, width, expanded, paint);
-		if (state.header && headerStill(state.header, rows, paint.key, width, expanded)) return state.header.lines;
-		const lines = this.draw(rows, width, expanded, paint);
+		const hostExpanded = isHostExpanded(rows);
+		if (lastRunning(rows, this.canRun)) return this.draw(rows, width, expanded, paint, hostExpanded);
+		const statuses = rows.map((row) => memberStatus(row, this.canRun));
+		if (state.header && headerStill(state.header, rows, statuses, paint.key, width, expanded, hostExpanded)) {
+			return state.header.lines;
+		}
+		const lines = this.draw(rows, width, expanded, paint, hostExpanded);
 		state.header = {
 			paint: paint.key,
 			width,
 			expanded,
-			hostExpanded: rows[0]!.expanded,
+			hostExpanded,
 			rows: [...rows],
 			args: rows.map((row) => row.args),
 			results: rows.map((row) => row.result),
+			statuses,
 			lines,
 		};
 		return lines;
 	}
 
-	private draw(rows: readonly ToolRowLike[], width: number, expanded: boolean, paint: Paint): string[] {
-		if (expanded && rows[0]?.expanded) return [];
+	private draw(rows: readonly ToolRowLike[], width: number, expanded: boolean, paint: Paint, hostExpanded = isHostExpanded(rows)): string[] {
+		if (expanded && hostExpanded) return [];
 		const { theme, chrome } = paint;
 		const fit = (line: string) => truncateToWidth(line, Math.max(1, width), "…");
 		const running = lastRunning(rows, this.canRun);

@@ -1,4 +1,4 @@
-import { closeSync, mkdirSync, openSync, readdirSync, readFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { DynamicBorder, getAgentDir, getMarkdownTheme, VERSION as HOST_VERSION, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { Markdown, Spacer, Text } from "@earendil-works/pi-tui";
@@ -159,22 +159,27 @@ export function showReleaseNotice(
 	} catch {
 		return false;
 	}
-	let shown = false;
-	// An invisible widget is the extension API's way to reach Pi's TUI and its chat.
-	// Pi builds the widget at once, so it can be removed right after.
-	ctx.ui.setWidget(WIDGET_KEY, (tui) => {
-		const chat = chatOf(tui);
-		if (chat) {
-			addReleaseBlock(chat, ctx.ui.theme, releases);
-			shown = true;
+	try {
+		let shown = false;
+		// An invisible widget is the extension API's way to reach Pi's TUI and its chat.
+		// Pi builds the widget at once, so it can be removed right after.
+		ctx.ui.setWidget(WIDGET_KEY, (tui) => {
+			const chat = chatOf(tui);
+			if (chat) {
+				addReleaseBlock(chat, ctx.ui.theme, releases);
+				shown = true;
+			}
+			return { render: () => [], invalidate() {} };
+		}, { placement: "belowEditor" });
+		ctx.ui.setWidget(WIDGET_KEY, undefined, { placement: "belowEditor" });
+		if (!shown) {
+			const text = releases.map(({ version: shownVersion, notes: shownNotes }) =>
+				`pi-compact-tools v${shownVersion}\n\n${releaseMarkdown(shownNotes)}`).join("\n\n");
+			ctx.ui.notify(text, "info");
 		}
-		return { render: () => [], invalidate() {} };
-	}, { placement: "belowEditor" });
-	ctx.ui.setWidget(WIDGET_KEY, undefined, { placement: "belowEditor" });
-	if (!shown) {
-		const text = releases.map(({ version: shownVersion, notes: shownNotes }) =>
-			`pi-compact-tools v${shownVersion}\n\n${releaseMarkdown(shownNotes)}`).join("\n\n");
-		ctx.ui.notify(text, "info");
+		return true;
+	} catch (err) {
+		rmSync(join(directory, version), { force: true });
+		throw err;
 	}
-	return true;
 }

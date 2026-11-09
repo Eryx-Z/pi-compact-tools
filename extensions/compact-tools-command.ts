@@ -1,9 +1,9 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DISPLAY_STYLES, type CompactToolsConfig, type DisplayStyle } from "./compact-tools-types.ts";
-import { loadConfig } from "./compact-tools-config.ts";
+import { loadConfig, parseStyle } from "./compact-tools-config.ts";
 
 type Scope = "global" | "project";
 const SCOPES: readonly Scope[] = ["global", "project"];
@@ -27,7 +27,14 @@ export function saveStyle(path: string, style: DisplayStyle): void {
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
-	if (linked) path = realpathSync(path);
+	if (linked) {
+		try {
+			path = realpathSync(path);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			path = resolve(dirname(path), readlinkSync(path));
+		}
+	}
 	let data: Record<string, unknown> = {};
 	let mode = 0o600;
 	try {
@@ -56,7 +63,8 @@ function projectSetsStyle(cwd: string, trusted: boolean): boolean {
 	if (!trusted) return false;
 	try {
 		const parsed: unknown = JSON.parse(readFileSync(configPath(cwd, "project"), "utf8"));
-		return !!parsed && typeof parsed === "object" && !Array.isArray(parsed) && "style" in parsed;
+		return !!parsed && typeof parsed === "object" && !Array.isArray(parsed)
+			&& parseStyle((parsed as Record<string, unknown>).style) !== undefined;
 	} catch {
 		return false;
 	}
@@ -75,11 +83,12 @@ export type ApplyStyle = (cwd: string, trusted: boolean, ctx: ExtensionContext) 
 export function registerCompactToolsCommand(pi: ExtensionAPI, getConfig: () => CompactToolsConfig, applyStyle?: ApplyStyle): void {
 	pi.registerCommand("compact-tools", {
 		description: "Choose Claude or default tool rows, or show settings and controls",
-		getArgumentCompletions: (prefix) => {
-			const typed = prefix.trimStart().toLowerCase();
-			const parts = typed.split(/\s+/);
+		getArgumentCompletions: (prefix: string, ctx?: { isProjectTrusted?: () => boolean }) => {
+			const typed = prefix.trimStart().replace(/\s+/g, " ").toLowerCase();
+			const parts = typed.split(" ");
 			const scoped = parts.length === 2 && DISPLAY_STYLES.includes(parts[0] as DisplayStyle);
-			const values = scoped ? SCOPES.map((scope) => `${parts[0]} ${scope}`) : [...DISPLAY_STYLES, "status", "help"];
+			const scopes = ctx?.isProjectTrusted?.() === false ? SCOPES.filter((scope) => scope !== "project") : SCOPES;
+			const values = scoped ? scopes.map((scope) => `${parts[0]} ${scope}`) : [...DISPLAY_STYLES, "status", "help"];
 			const items = values.filter((value) => value.startsWith(typed) && value !== typed.trimEnd()).map((value) => ({ value, label: value }));
 			return items.length ? items : null;
 		},
@@ -99,12 +108,14 @@ export function registerCompactToolsCommand(pi: ExtensionAPI, getConfig: () => C
 				].join("\n"), "info");
 				return;
 			}
-			if (parts.length > 2 || (parts.length > 0 && !DISPLAY_STYLES.includes(parts[0] as DisplayStyle))
+			const legacy = parts[0] === "compact" || parts[0] === "codex" ? parts[0] : undefined;
+			const named = parts[0] === undefined ? undefined : parseStyle(parts[0]);
+			if (parts.length > 2 || (parts.length > 0 && !named)
 				|| (parts[1] !== undefined && !SCOPES.includes(parts[1] as Scope))) {
 				ctx.ui.notify(HELP, "warning");
 				return;
 			}
-			const named = parts[0] as DisplayStyle | undefined;
+			const legacyNote = legacy ? "compact and codex were streamlined into claude. " : "";
 			if (named && !ctx.isIdle() && !applyStyle) {
 				ctx.ui.notify(BUSY, "warning");
 				return;
@@ -146,20 +157,20 @@ export function registerCompactToolsCommand(pi: ExtensionAPI, getConfig: () => C
 			const effective = loadConfig(ctx.cwd, ctx.isProjectTrusted()).style;
 			const where = scope === "project" ? "this project" : "global settings";
 			if (scope === "global" && effective !== style) {
-				ctx.ui.notify(`Saved ${style} to global settings, but this project keeps its own ${effective} style. Run /compact-tools ${style} to switch it here.`, "warning");
+				ctx.ui.notify(`${legacyNote}Saved ${style} to global settings, but this project keeps its own ${effective} style. Run /compact-tools ${style} to switch it here.`, "warning");
 				return;
 			}
 			if (!reloads && applyStyle!(ctx.cwd, ctx.isProjectTrusted(), ctx)) {
-				ctx.ui.notify(`Switched to ${style} style (saved to ${where}).`, "info");
+				ctx.ui.notify(`${legacyNote}Switched to ${style} style (saved to ${where}).`, "info");
 				return;
 			}
 			if (!ctx.isIdle()) {
-				ctx.ui.notify(`Saved ${style} style to ${where}. It applies once the response finishes; run /reload then.`, "warning");
+				ctx.ui.notify(`${legacyNote}Saved ${style} style to ${where}. It applies once the response finishes; run /reload then.`, "warning");
 				return;
 			}
 			ctx.ui.notify(style === "off"
 				? `Restoring Pi's native UI (saved to ${where}). Reloading…`
-				: `Switching to ${style} style (saved to ${where}). Reloading…`, "info");
+				: `${legacyNote}Switching to ${style} style (saved to ${where}). Reloading…`, "info");
 			const ui = ctx.ui;
 			try {
 				await ctx.reload();

@@ -13,6 +13,7 @@ import {
 	neutralizeRgb,
 	paletteOf,
 	rgbPainter,
+	themeBgPole,
 	themeColorRgb,
 	withContrast,
 	type Rgb,
@@ -114,21 +115,21 @@ export function completionPainter(theme: Theme): (text: string) => string {
 	});
 }
 
-/** Nested names keep the title hue, slightly darker than ordinary titles, without bold. */
+/** Nested names keep the title hue, slightly softer than ordinary titles, without bold. */
 export function nestedTitlePainter(theme: Theme): (text: string) => string {
 	return perPalette(theme, "nested-title", () => {
 		const title = themeColorRgb(theme, "toolTitle");
-		const paint = title ? rgbPainter(theme, interpolateRgb(title, { r: 0, g: 0, b: 0 }, 0.12))
+		const paint = title ? rgbPainter(theme, interpolateRgb(title, themeBgPole(theme), 0.12))
 			: (text: string) => theme.fg("toolTitle", text);
 		return paint;
 	});
 }
 
-/** Quiet summary numbers retain outcome hues at 92% brightness. */
+/** Quiet summary numbers retain outcome hues at 92% contrast. */
 export function nestedCountPainter(theme: Theme, color: "success" | "error" | "warning"): (text: string) => string {
 	return perPalette(theme, `nested-count:${color}`, () => {
 		const rgb = themeColorRgb(theme, color);
-		return rgb ? rgbPainter(theme, interpolateRgb(rgb, { r: 0, g: 0, b: 0 }, 0.08))
+		return rgb ? rgbPainter(theme, interpolateRgb(rgb, themeBgPole(theme), 0.08))
 			: (text: string) => theme.fg(color, text);
 	});
 }

@@ -79,7 +79,8 @@ export function claudeCommand(command: string, expanded: boolean): string {
 	if (expanded) return text;
 	const lines = text.split("\n");
 	let shown = lines.length > CLAUDE_COMMAND_LINES ? lines.slice(0, CLAUDE_COMMAND_LINES).join("\n") : text;
-	if (shown.length > CLAUDE_COMMAND_CHARS) shown = shown.slice(0, CLAUDE_COMMAND_CHARS);
+	const codePoints = Array.from(shown);
+	if (codePoints.length > CLAUDE_COMMAND_CHARS) shown = codePoints.slice(0, CLAUDE_COMMAND_CHARS).join("");
 	return shown === text ? text : `${shown.trim()}…`;
 }
 
@@ -250,12 +251,23 @@ export function claudeFailure(name: string, output: string, expanded = false): {
 
 const TOOL_NAMES = new Set(Object.keys(LABELS));
 
-const FD_DUP_REDIRECT = /^\d*(?:>&|<&)(?:\d+|-)/u;
-const TARGET_REDIRECT = /^\d*(?:<<<|<<-?|&>>|&>|>>|>\|?|<>|<)/u;
+const HIGHLIGHT_MAX_LINE_CHARS = 4096;
+
+const SHELL_SPACE = /[ \t]+/yu;
+const FD_DUP_REDIRECT = /\d*(?:>&|<&)(?:\d+|-)/yu;
+const TARGET_REDIRECT = /\d*(?:<<<|<<-?|&>>|&>|>>|>\|?|<>|<)/yu;
+const SHELL_SINGLE_QUOTE_LINE_END = /'\s*$/yu;
+const SHELL_VARIABLE = /\$(?:\{[^}]*\}?|[A-Za-z_][A-Za-z0-9_]*|[0-9#?@*$!-])?/yu;
+const SHELL_WORD = /[^\s'"$#&|;<>()]+/yu;
 const CONTROL_OPERATORS = ["&&", "||", "|&", "|", ";", "&", "("];
 const SHELL_WRAPPERS = new Set(["sudo", "env", "nohup", "time", "nice", "xargs", "command", "builtin", "exec"]);
 
 const PATH_TOKEN = /^(?:~\/|\/(?:etc|usr|var|home|opt|tmp|srv|run|lib|lib64|bin|sbin|proc|sys|dev|mnt|media|root|boot|snap|app|data|workspace|work)\b|\.\.?\/|\/(?:[\w.@+-]+\/)+)[\w./@+-]*$/u;
+
+function matchAt(regex: RegExp, text: string, index: number): string | undefined {
+	regex.lastIndex = index;
+	return regex.exec(text)?.[0];
+}
 
 function highlightShellValue(value: string, theme: Theme): string {
 	if (!value) return "";
@@ -268,14 +280,15 @@ function highlightShellValue(value: string, theme: Theme): string {
 }
 
 function highlightShellLine(line: string, theme: Theme): string {
+	if (!line) return "";
+	if (line.length > HIGHLIGHT_MAX_LINE_CHARS) return theme.fg("toolOutput", line);
 	let output = "";
 	let commandStart = true;
 	let inAssignmentWord = false;
 	let redirectState: "none" | "awaiting" | "consuming" = "none";
 	let index = 0;
 	while (index < line.length) {
-		const rest = line.slice(index);
-		const space = rest.match(/^[ \t]+/u)?.[0];
+		const space = matchAt(SHELL_SPACE, line, index);
 		if (space) {
 			output += space;
 			inAssignmentWord = false;
@@ -283,15 +296,20 @@ function highlightShellLine(line: string, theme: Theme): string {
 			index += space.length;
 			continue;
 		}
-		if (rest[0] === "#") {
-			output += highlightCommentLine(rest, theme);
+		const ch = line[index]!;
+		if (ch === "#") {
+			output += highlightCommentLine(line.slice(index), theme);
 			break;
 		}
-		if (rest === "…" || rest === "'…" || rest === "\"…") {
-			output += theme.fg("syntaxPunctuation", rest);
+		const remaining = line.length - index;
+		if (
+			(remaining === 1 && ch === "…")
+			|| (remaining === 2 && (ch === "'" || ch === "\"") && line[index + 1] === "…")
+		) {
+			output += theme.fg("syntaxPunctuation", line.slice(index));
 			break;
 		}
-		const fdDup = rest.match(FD_DUP_REDIRECT)?.[0];
+		const fdDup = matchAt(FD_DUP_REDIRECT, line, index);
 		if (fdDup) {
 			output += theme.fg("syntaxOperator", fdDup);
 			inAssignmentWord = false;
@@ -299,7 +317,7 @@ function highlightShellLine(line: string, theme: Theme): string {
 			index += fdDup.length;
 			continue;
 		}
-		const targetRedirect = rest.match(TARGET_REDIRECT)?.[0];
+		const targetRedirect = matchAt(TARGET_REDIRECT, line, index);
 		if (targetRedirect) {
 			output += theme.fg("syntaxOperator", targetRedirect);
 			inAssignmentWord = false;
@@ -307,7 +325,7 @@ function highlightShellLine(line: string, theme: Theme): string {
 			index += targetRedirect.length;
 			continue;
 		}
-		if (rest[0] === ")") {
+		if (ch === ")") {
 			output += theme.fg("syntaxOperator", ")");
 			inAssignmentWord = false;
 			redirectState = "none";
@@ -315,7 +333,7 @@ function highlightShellLine(line: string, theme: Theme): string {
 			index += 1;
 			continue;
 		}
-		const operator = CONTROL_OPERATORS.find((candidate) => rest.startsWith(candidate));
+		const operator = CONTROL_OPERATORS.find((candidate) => line.startsWith(candidate, index));
 		if (operator) {
 			output += theme.fg("syntaxOperator", operator);
 			inAssignmentWord = false;
@@ -324,24 +342,24 @@ function highlightShellLine(line: string, theme: Theme): string {
 			index += operator.length;
 			continue;
 		}
-		if (rest[0] === "'" || rest[0] === "\"") {
-			const quote = rest[0]!;
+		if (ch === "'" || ch === "\"") {
+			const quote = ch;
 			// Remote/subshell scripts (`ssh host '\n...`) open a quote at end of line;
 			// keep inner lines highlighted as commands rather than one flat string.
-			if (quote === "'" && /^'\s*$/u.test(rest)) {
-				output += theme.fg("syntaxPunctuation", rest);
+			if (quote === "'" && matchAt(SHELL_SINGLE_QUOTE_LINE_END, line, index) !== undefined) {
+				output += theme.fg("syntaxPunctuation", line.slice(index));
 				break;
 			}
-			let end = 1;
-			while (end < rest.length && rest[end] !== quote) {
-				end += quote === "\"" && rest[end] === "\\" ? 2 : 1;
+			let end = index + 1;
+			while (end < line.length && line[end] !== quote) {
+				end += quote === "\"" && line[end] === "\\" ? 2 : 1;
 			}
-			if (end < rest.length) {
-				const literal = rest.slice(0, end + 1);
+			if (end < line.length) {
+				const literal = line.slice(index, end + 1);
 				output += theme.fg("syntaxString", literal);
 				if (redirectState !== "none") redirectState = "consuming";
 				else if (!inAssignmentWord) commandStart = false;
-				index += literal.length;
+				index = end + 1;
 				continue;
 			}
 			// Trailing quote before truncation ellipsis (`echo "=== ... ==="'…`)
@@ -350,20 +368,21 @@ function highlightShellLine(line: string, theme: Theme): string {
 				index += 1;
 				continue;
 			}
+			const rest = line.slice(index);
 			const trailingEllipsis = rest.endsWith("…") ? "…" : "";
 			const body = trailingEllipsis ? rest.slice(0, -1) : rest;
 			output += theme.fg("syntaxString", body) + (trailingEllipsis ? theme.fg("syntaxPunctuation", trailingEllipsis) : "");
 			break;
 		}
-		if (rest[0] === "$") {
-			const variable = rest.match(/^\$(?:\{[^}]*\}?|[A-Za-z_][A-Za-z0-9_]*|[0-9#?@*$!-])?/u)![0];
+		if (ch === "$") {
+			const variable = matchAt(SHELL_VARIABLE, line, index) ?? "$";
 			output += theme.fg("syntaxVariable", variable);
 			if (redirectState !== "none") redirectState = "consuming";
 			else if (!inAssignmentWord) commandStart = false;
 			index += variable.length;
 			continue;
 		}
-		const word = rest.match(/^[^\s'"$#&|;<>()]+/u)?.[0] ?? rest[0]!;
+		const word = matchAt(SHELL_WORD, line, index) ?? ch;
 		const effectiveCommandStart = commandStart && !inAssignmentWord && redirectState === "none";
 		const trailingQuoteEllipsis = word.match(/^(.+?)('?…|')$/u);
 		if (trailingQuoteEllipsis && !word.startsWith("'")) {
@@ -444,9 +463,9 @@ const INLINE_OUTPUT_TOKEN = new RegExp(
 		// 3. Quoted literals (avoid matching English contractions like `can't ... don't`)
 		"(?<string>\"[^\"\\n]*\"|(?<![\\p{L}\\p{N}_])'[^'\\n]*'(?![\\p{L}\\p{N}_]))",
 		// 4. Error / Warning / Success keywords
-		"(?<errorWord>\\b(?:ERROR|FATAL|PANIC|CRITICAL|FAILED|FAIL|ERR|DEAD|OFFLINE|UNHEALTHY|KILLED|OOM|inactive|failed)\\b)",
-		"(?<warningWord>\\b(?:WARNING|WARN|DEPRECATED|TIMEOUT|RETRY|DEGRADED|activating|deactivating|reloading|disabled|masked)\\b)",
-		"(?<successWord>\\b(?:SUCCESS|SUCCEEDED|PASSED|PASS|OK|ONLINE|HEALTHY|(?:active|enabled|loaded|running|listening)(?![ \\t]*:))\\b)",
+		"(?<errorWord>(?<![\\w./:-])(?:ERROR|FATAL|PANIC|CRITICAL|FAILED|FAIL|ERR|DEAD|OFFLINE|UNHEALTHY|KILLED|OOM|inactive|failed)(?![\\w./-]))",
+		"(?<warningWord>(?<![\\w./:-])(?:WARNING|WARN|DEPRECATED|TIMEOUT|RETRY|DEGRADED|activating|deactivating|reloading|disabled|masked)(?![\\w./-]))",
+		"(?<successWord>(?<![\\w./:-])(?:SUCCESS|SUCCEEDED|PASSED|PASS|OK|ONLINE|HEALTHY|(?:active|enabled|loaded|running|listening)(?![ \\t]*:))(?![\\w./-]))",
 	].join("|"),
 	"giu",
 );
@@ -493,6 +512,7 @@ function highlightCommentLine(line: string, theme: Theme): string {
  */
 export function highlightClaudeOutputLine(line: string, theme: Theme): string {
 	if (!line || /\x1b/u.test(line)) return line;
+	if (line.length > HIGHLIGHT_MAX_LINE_CHARS) return theme.fg("toolOutput", line);
 	const banner = matchBannerLine(line);
 	if (banner) {
 		const [, lead = "", open = "", title = "", close = "", tail = ""] = banner;

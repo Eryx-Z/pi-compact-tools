@@ -174,9 +174,29 @@ export class LiveCallContainer extends CachedContainer {
 	}
 }
 
+function normalizeText(text: string): string {
+	return text.replace(/\r\n/gu, "\n").replace(/\r/gu, "").replace(/\t/gu, "   ");
+}
+
+function trimEndAnsi(text: string): string {
+	let trailingResets = "";
+	let current = text;
+	while (true) {
+		current = current.replace(/[ \t]+$/u, "");
+		const ansiMatch = current.match(/(?:\x1b\[[0-9;]*m)+$/u);
+		if (!ansiMatch) break;
+		const beforeAnsi = current.slice(0, -ansiMatch[0].length);
+		if (!/[ \t]$/u.test(beforeAnsi)) break;
+		trailingResets = ansiMatch[0] + trailingResets;
+		current = beforeAnsi;
+	}
+	const result = current + trailingResets;
+	return stripTerminalSequences(result).length === 0 ? "" : result;
+}
+
 export function prefixedText(text: string, firstPrefix: string, continuationPrefix = firstPrefix): Component {
 	const prefixWidth = Math.max(visibleWidth(firstPrefix), visibleWidth(continuationPrefix));
-	const normalized = text.replace(/\t/g, "   ");
+	const normalized = normalizeText(text);
 	return new CachedComponent((width) => {
 		const lines = wrapTextWithAnsi(normalized, Math.max(1, width - prefixWidth));
 		return lines.map((line, index) => `${index === 0 ? firstPrefix : continuationPrefix}${line}`);
@@ -189,7 +209,7 @@ export function prefixedText(text: string, firstPrefix: string, continuationPref
  */
 export function prefixedSentence(text: string, firstPrefix: string, continuationPrefix: string, trimWrappedIndent = false): Component {
 	const prefixWidth = Math.max(visibleWidth(firstPrefix), visibleWidth(continuationPrefix));
-	const lines = text.replace(/\t/g, "   ").split("\n");
+	const lines = normalizeText(text).split("\n");
 	return new CachedComponent((width) => {
 		const available = Math.max(1, width - prefixWidth);
 		return lines.flatMap((line) => wrapTextWithAnsi(line, available).map((row, index) => {
@@ -224,9 +244,23 @@ export function claudeRows(
 	return new CachedComponent((width) => {
 		const available = Math.max(1, width - prefixWidth);
 		const wrapWidth = maxRows === undefined ? available : Math.min(available, Math.max(width - 10, 10));
-		let rows = lines.flatMap((line) => hardWrapTextWithAnsi(line, wrapWidth).map((row) => row.trimEnd()));
-		const hidden = maxRows !== undefined && rows.length > maxRows + (fromEnd ? 0 : 1) ? rows.length - maxRows : 0;
-		if (hidden && maxRows !== undefined) rows = fromEnd ? rows.slice(-maxRows) : rows.slice(0, maxRows);
+		const wrapLine = (line: string) => hardWrapTextWithAnsi(line, wrapWidth).map(trimEndAnsi);
+		let rows: string[];
+		let hidden = 0;
+		if (maxRows !== undefined && lines.length > Math.max(200, maxRows + 1)) {
+			const windowSize = maxRows + 1;
+			const sliceLines = fromEnd ? lines.slice(-windowSize) : lines.slice(0, windowSize);
+			const wrappedSlice = sliceLines.flatMap(wrapLine);
+			const totalRows = wrappedSlice.length + (lines.length - sliceLines.length);
+			rows = maxRows === 0 ? [] : (fromEnd ? wrappedSlice.slice(-maxRows) : wrappedSlice.slice(0, maxRows));
+			hidden = Math.max(0, totalRows - rows.length);
+		} else {
+			rows = lines.flatMap(wrapLine);
+			hidden = maxRows !== undefined && rows.length > maxRows + (fromEnd ? 0 : 1) ? rows.length - maxRows : 0;
+			if (hidden && maxRows !== undefined) {
+				rows = maxRows === 0 ? [] : (fromEnd ? rows.slice(-maxRows) : rows.slice(0, maxRows));
+			}
+		}
 		const rendered = rows.map((row, index) => `${index === 0 ? firstPrefix : continuationPrefix}${row}`);
 		if (completion) rendered.push(...completion.render(width));
 		if (hidden) rendered.push((rendered.length ? continuationPrefix : firstPrefix) + truncateToWidth(more(hidden), available, "…"));
@@ -237,7 +271,7 @@ export function claudeRows(
 export function hardWrapTextWithAnsi(text: string, width: number): string[] {
 	const safeWidth = Math.max(1, width);
 	const wrapped: string[] = [];
-	for (const logicalLine of text.replace(/\t/g, "   ").split("\n")) {
+	for (const logicalLine of normalizeText(text).split("\n")) {
 		const lineWidth = visibleWidth(logicalLine);
 		if (lineWidth === 0) {
 			wrapped.push("");
@@ -246,13 +280,19 @@ export function hardWrapTextWithAnsi(text: string, width: number): string[] {
 		let offset = 0;
 		while (offset < lineWidth) {
 			if (offset > 0) {
-				const remainder = sliceByColumn(logicalLine, offset, lineWidth - offset, true);
-				const whitespace = stripTerminalSequences(remainder).match(/^\s+/u)?.[0] ?? "";
-				offset += visibleWidth(whitespace);
+				while (offset < lineWidth) {
+					const remainder = sliceByColumn(logicalLine, offset, safeWidth + 1, true);
+					const plain = stripTerminalSequences(remainder);
+					const whitespace = plain.match(/^\s+/u)?.[0] ?? "";
+					if (!whitespace) break;
+					offset += visibleWidth(whitespace);
+					if (whitespace.length < plain.length) break;
+				}
 				if (offset >= lineWidth) break;
 			}
-			wrapped.push(sliceByColumn(logicalLine, offset, safeWidth, true));
-			offset += safeWidth;
+			const chunk = sliceByColumn(logicalLine, offset, safeWidth, true);
+			wrapped.push(chunk);
+			offset += Math.max(1, visibleWidth(chunk));
 		}
 	}
 	return wrapped;
@@ -428,8 +468,10 @@ function hardSliceAnsi(text: string, width: number): string[] {
 	const lineWidth = visibleWidth(text);
 	if (lineWidth === 0) return [""];
 	const slices: string[] = [];
-	for (let offset = 0; offset < lineWidth; offset += safeWidth) {
-		slices.push(sliceByColumn(text, offset, safeWidth, true));
+	for (let offset = 0; offset < lineWidth;) {
+		const chunk = sliceByColumn(text, offset, safeWidth, true);
+		slices.push(chunk);
+		offset += Math.max(1, visibleWidth(chunk));
 	}
 	return slices;
 }
@@ -603,7 +645,10 @@ function renderCodeRows(lines: CodeDiffLine[], path: string, theme: Theme, optio
 			const tint = line.kind === "add" ? addedTint : line.kind === "remove" ? removedTint : undefined;
 			const wordRanges = words?.get(index);
 			const wordTint = line.kind === "add" ? addedWordTint : removedWordTint;
+			let chunkStart = 0;
 			for (const [chunkIndex, chunk] of hardSliceAnsi(highlighted![index] ?? line.content, codeWidth).entries()) {
+				const currentChunkStart = chunkStart;
+				chunkStart += visibleWidth(chunk);
 				const gutter = codeGutter(
 					line.kind,
 					chunkIndex === 0 ? line.lineNumber : undefined,
@@ -620,7 +665,7 @@ function renderCodeRows(lines: CodeDiffLine[], path: string, theme: Theme, optio
 				if (wordRanges && wordTint) {
 					output.push(
 						prefix + fillRgb(theme, tint, gutter)
-							+ fillWithWords(theme, tint, wordTint, line.content, wordRanges, chunk, chunkIndex * codeWidth, padding),
+							+ fillWithWords(theme, tint, wordTint, line.content, wordRanges, chunk, currentChunkStart, padding),
 					);
 					continue;
 				}

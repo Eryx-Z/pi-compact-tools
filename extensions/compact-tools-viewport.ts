@@ -90,14 +90,18 @@ export function findAnchorTop(
 	});
 	const bottom = Math.min(before.length, top + Math.max(1, height));
 	// Visit the viewport first, then preceding rows, without copying candidate windows.
-	for (let candidate = 0; candidate < bottom; candidate++) {
-		const row = candidate < bottom - top ? top + candidate : bottom - candidate - 1;
-		if (row + ANCHOR_LINES > before.length || (!hasText(before[row]) && !hasText(before[row + 1]))) continue;
+	for (let step = 0; step < bottom; step++) {
+		const row = step < bottom - top ? top + step : bottom - step - 1;
+		const rowHasText = hasText(before[row]);
+		if (row + ANCHOR_LINES > before.length || (!rowHasText && !hasText(before[row + 1]))) continue;
 		// Several places can match a short window; the one that keeps matching for
 		// longest is the same text, and distance only breaks a remaining tie.
 		let best: number | undefined;
 		let bestRun = 0;
-		for (const start of starts.get(before[row]!) ?? []) {
+		const candidates = rowHasText ? starts.get(before[row]!) : starts.get(before[row + 1]!);
+		for (const candidate of candidates ?? []) {
+			if (!rowHasText && candidate === 0) continue;
+			const start = rowHasText ? candidate : candidate - 1;
 			const run = matchingRun(before, row, after, start, TIE_BREAK_LINES);
 			if (run < ANCHOR_LINES) continue;
 			if (best === undefined || run > bestRun
@@ -228,6 +232,7 @@ export class ViewportKeeper {
 		const state = sharedState();
 		state.pending = undefined;
 		state.tui = undefined;
+		state.restore = undefined;
 		try { unsubscribe?.(); }
 		finally { context?.ui.setWidget(WIDGET_KEY, undefined, { placement: "belowEditor" }); }
 	}

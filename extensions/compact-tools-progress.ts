@@ -55,8 +55,18 @@ export function glowProgressMessage(
 	return paintGlowFrame(message, frame, theme, progressGlow(theme, level));
 }
 
+const graphemeSegmenter = typeof Intl !== "undefined" && "Segmenter" in Intl
+	? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+	: undefined;
+
+function segmentGraphemes(message: string): string[] {
+	return graphemeSegmenter
+		? Array.from(graphemeSegmenter.segment(message), (s) => s.segment)
+		: [...message];
+}
+
 function paintGlowFrame(message: string, frame: number, theme: Theme, glow: ColorRamp | undefined): string {
-	const characters = [...message];
+	const characters = segmentGraphemes(message);
 	if (characters.length === 0) return "";
 	const radius = glowRadius(characters.length);
 	const center = frame % (characters.length + radius * 2) - radius;
@@ -66,15 +76,29 @@ function paintGlowFrame(message: string, frame: number, theme: Theme, glow: Colo
 		return characters.map((character, index) =>
 			theme.fg(Math.abs(index - center) < radius ? "text" : "muted", character)).join("");
 	}
-	return characters.map((character, index) => {
+	const base = glow.from;
+	let output = "";
+	let unlitRun = "";
+	for (let index = 0; index < characters.length; index++) {
+		const character = characters[index]!;
 		const distance = Math.abs(index - center);
 		const strength = Math.max(0, 1 - distance / radius);
-		return colorizeRgb(theme, interpolateRgb(glow.from, glow.to, strength), character);
-	}).join("");
+		if (strength === 0) {
+			unlitRun += character;
+			continue;
+		}
+		if (unlitRun) {
+			output += colorizeRgb(theme, base, unlitRun);
+			unlitRun = "";
+		}
+		output += colorizeRgb(theme, interpolateRgb(base, glow.to, strength), character);
+	}
+	if (unlitRun) output += colorizeRgb(theme, base, unlitRun);
+	return output;
 }
 
 function createGlowFrames(message: string, theme: Theme, level: ThinkingLevel): string[] {
-	const length = [...message].length;
+	const length = segmentGraphemes(message).length;
 	if (length === 0) return [""];
 	// One ramp for the whole cycle; only the sweep position changes between frames.
 	const glow = progressGlow(theme, level);

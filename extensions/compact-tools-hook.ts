@@ -23,12 +23,15 @@ export function hookMethod(
 	name: string,
 	behavior: MethodBehavior,
 	legacy: readonly symbol[] = [],
-): boolean {
+): (() => void) | false {
 	const holder = target as Record<PropertyKey, any>;
 	const key = Symbol.for(`pi-compact-tools.hook.${name}`);
 	if (Object.hasOwn(holder, key)) {
-		(holder[key] as HookRecord).behavior = behavior;
-		return true;
+		const record = holder[key] as HookRecord;
+		record.behavior = behavior;
+		return () => {
+			record.behavior = (self, args, original) => original.apply(self, args);
+		};
 	}
 	if (typeof holder[method] !== "function") return false;
 	let original: (...args: any[]) => any = holder[method];
@@ -43,5 +46,7 @@ export function hookMethod(
 		return record.behavior(this, args, original);
 	};
 	Object.defineProperty(holder, key, { value: record });
-	return true;
+	return () => {
+		record.behavior = (self, args, original) => original.apply(self, args);
+	};
 }

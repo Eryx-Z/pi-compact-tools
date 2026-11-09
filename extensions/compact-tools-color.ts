@@ -106,7 +106,9 @@ export function colorizeRgb(theme: Theme, color: Rgb, text: string): string {
 }
 
 export function fillRgb(theme: Theme, color: Rgb, text: string): string {
-	return `${openColor(theme, color, 48)}${text}\x1b[49m`;
+	const bg = openColor(theme, color, 48);
+	const body = text.replace(/\x1b\[(?:0?m|49m|(?!38;|48;)[0-9;]*;(?:0|49)m)/gu, (match) => `${match}${bg}`);
+	return `${bg}${body}\x1b[49m`;
 }
 
 /** A painter for one color, its escape sequence written once for every text it paints. */
@@ -174,6 +176,11 @@ function isDark(theme: Theme): boolean {
 	return !text || luminanceRgb(text) > 128;
 }
 
+/** The background pole (black on dark themes, white on light themes) to interpolate toward. */
+export function themeBgPole(theme: Theme): Rgb {
+	return isDark(theme) ? BLACK : WHITE;
+}
+
 /** Mix a color toward its own gray so a vivid theme hue cannot turn chrome into a highlight. */
 export function neutralizeRgb(rgb: Rgb, keepHue: number): Rgb {
 	const gray = Math.round(luminanceRgb(rgb));
@@ -232,5 +239,5 @@ export function withContrast(theme: Theme, rgb: Rgb, minimum: number, maximum: n
  */
 export function diffTintRgb(theme: Theme, color: ThemeColor, amount = 0.17): Rgb | undefined {
 	const rgb = themeColorRgb(theme, color);
-	return rgb && interpolateRgb(isDark(theme) ? BLACK : WHITE, rgb, amount);
+	return rgb && interpolateRgb(themeBgPole(theme), rgb, amount);
 }

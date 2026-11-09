@@ -10,18 +10,24 @@ type Subscription = { listener: () => void; period: number; elapsed: number };
 const listeners = new Set<Subscription>();
 let timer: ReturnType<typeof setInterval> | undefined;
 let cadence = 0;
+let lastTick = 0;
 
 function reschedule(): void {
 	const next = listeners.size ? Math.min(...[...listeners].map(({ period }) => period)) : 0;
 	if (next === cadence) return;
+	const wasRunning = timer !== undefined;
 	if (timer) clearInterval(timer);
 	timer = undefined;
 	cadence = next;
-	if (!next) return;
+	if (!next) {
+		lastTick = 0;
+		return;
+	}
+	if (!wasRunning) lastTick = performance.now();
 	timer = setInterval(() => {
-		// Capture the elapsed step: a subscriber may change the cadence or unsubscribe
-		// another callback while this dispatch is in progress.
-		const step = cadence;
+		const now = performance.now();
+		const step = Math.max(1, Math.round(now - lastTick));
+		lastTick = now;
 		for (const entry of [...listeners]) {
 			if (!listeners.has(entry)) continue;
 			entry.elapsed += step;

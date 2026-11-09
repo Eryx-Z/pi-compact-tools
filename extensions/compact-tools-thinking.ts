@@ -45,24 +45,56 @@ export function classifyThinkingToggleInput(data: string): ThinkingToggleInput |
 }
 
 function plainSummary(line: string): string {
+	const codeSpans: string[] = [];
 	return line
 		.replace(/^\s{0,3}#{1,6}\s+/u, "")
 		.replace(/^\s*[-*+]\s+/u, "")
 		.replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1")
-		.replace(/[*_~`]/gu, "")
+		.replace(/`([^`]+)`/gu, (_match, code: string) => {
+			codeSpans.push(code);
+			return `\0${codeSpans.length - 1}\0`;
+		})
+		.replace(/[*~`]/gu, "")
+		.replace(/(?<![\w])_+([^_\s](?:.*?[^_\s])?)_+(?![\w]|\.\w)/gu, "$1")
+		.replace(/\0(\d+)\0/gu, (_match, index: string) => codeSpans[Number(index)] ?? "")
 		.replace(/\s+/gu, " ")
 		.trim();
 }
 
 type ThinkingSection = { summary: string; detail: string };
 
+function parseFence(line: string): string | undefined {
+	const match = line.match(/^\s{0,3}(`{3,}|~{3,})(.*)$/u);
+	if (!match) return undefined;
+	const marker = match[1]!;
+	const rest = match[2] ?? "";
+	if (marker[0] === "`" && rest.includes("`")) return undefined;
+	return marker;
+}
+
+function isClosingFence(line: string, openMarker: string): boolean {
+	const match = line.match(/^\s{0,3}(`{3,}|~{3,})\s*$/u);
+	if (!match) return false;
+	const marker = match[1]!;
+	return marker[0] === openMarker[0] && marker.length >= openMarker.length;
+}
+
 function splitThinkingSections(markdown: string): ThinkingSection[] {
 	const normalized = markdown.includes("\r") ? markdown.replace(/\r\n?/gu, "\n") : markdown;
 	const lines = normalized.split("\n");
 	let first = -1;
 	let summary = "";
+	let startFromFirst = false;
 	for (let index = 0; index < lines.length; index++) {
-		summary = plainSummary(lines[index]!);
+		const line = lines[index]!;
+		if (!line.trim()) continue;
+		if (parseFence(line)) {
+			first = index;
+			summary = "Thinking...";
+			startFromFirst = true;
+			break;
+		}
+		summary = plainSummary(line);
 		if (summary) {
 			first = index;
 			break;
@@ -71,26 +103,38 @@ function splitThinkingSections(markdown: string): ThinkingSection[] {
 	if (first < 0) return [{ summary: "Thinking...", detail: "" }];
 	const sections: ThinkingSection[] = [];
 	let detail: string[] = [];
-	let inFence = false;
+	let openFence: string | undefined;
 	const flush = () => {
 		sections.push({ summary, detail: detail.join("\n").trim() });
 		detail = [];
 	};
-	for (let index = first + 1; index < lines.length; index++) {
+	for (let index = startFromFirst ? first : first + 1; index < lines.length; index++) {
 		const line = lines[index]!;
-		const fence = /^\s*(```|~~~)/u.test(line);
-		if (!inFence) {
+		if (openFence === undefined) {
+			const fence = parseFence(line);
+			if (fence) {
+				openFence = fence;
+				detail.push(line);
+				continue;
+			}
 			const boldHeading = line.match(/^\s*\*\*(.+?)\*\*\s*$/u)?.[1];
 			const markdownHeading = line.match(/^\s{0,3}#{1,6}\s+(.+?)\s*$/u)?.[1];
 			const heading = boldHeading ?? markdownHeading;
 			if (heading) {
-				flush();
-				summary = plainSummary(heading);
-				continue;
+				const nextSummary = plainSummary(heading);
+				if (nextSummary) {
+					flush();
+					summary = nextSummary;
+					continue;
+				}
+			}
+			detail.push(line);
+		} else {
+			detail.push(line);
+			if (isClosingFence(line, openFence)) {
+				openFence = undefined;
 			}
 		}
-		detail.push(line);
-		if (fence) inFence = !inFence;
 	}
 	flush();
 	return sections;
@@ -102,19 +146,20 @@ function compactDetail(
 	stylePrefix: (prefix: string) => string,
 ): string {
 	const output: string[] = [];
-	let inFence = false;
+	let openFence: string | undefined;
 	for (const logicalLine of detail.replace(/\t/gu, "   ").split("\n")) {
-		const fence = /^\s*(```|~~~)/u.test(logicalLine);
-		if (!inFence && fence) {
-			// Fences need a real blockquote and blank delimiter to remain valid Markdown.
-			output.push("", `> ${logicalLine}`);
-			inFence = true;
-			continue;
-		}
-		if (inFence) {
-			output.push(logicalLine ? `> ${logicalLine}` : ">");
+		if (openFence === undefined) {
+			const fence = parseFence(logicalLine);
 			if (fence) {
-				inFence = false;
+				// Fences need a real blockquote and blank delimiter to remain valid Markdown.
+				output.push("", `> ${logicalLine}`);
+				openFence = fence;
+				continue;
+			}
+		} else {
+			output.push(logicalLine ? `> ${logicalLine}` : ">");
+			if (isClosingFence(logicalLine, openFence)) {
+				openFence = undefined;
 				output.push("");
 			}
 			continue;
@@ -264,6 +309,10 @@ export class ThinkingCycleController {
 			// Kitty-capable macOS terminals report held keys as repeat events. Treating
 			// those as presses can skip detail before the user sees it.
 			if (input === "release" || input === "repeat") return { consume: true };
+			if (this.phase === "hidden") {
+				this.phase = "summary";
+				return undefined;
+			}
 			// With no provider-supplied detail, leave Ctrl+T to Pi's normal
 			// visible/hidden toggle instead of inserting an identical detail phase.
 			if (!this.hasToggleableThinking) return undefined;

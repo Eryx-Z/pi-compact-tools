@@ -52,7 +52,20 @@ export function parseShell(source: string): ParsedShell | undefined {
 	};
 	for (let index = 0; index < source.length; index++) {
 		const character = source[index]!;
-		if (character === "'") {
+		if (character === "'" || (character === "$" && source[index + 1] === "'")) {
+			if (character === "$") {
+				let end = index + 2;
+				for (; end < source.length && source[end] !== "'"; end++) {
+					if (source[end] === "\\") {
+						if (++end >= source.length) return undefined;
+					}
+					word += source[end];
+				}
+				if (end >= source.length) return undefined;
+				started = true;
+				index = end;
+				continue;
+			}
 			const end = source.indexOf("'", index + 1);
 			if (end < 0) return undefined;
 			word += source.slice(index + 1, end);
@@ -60,15 +73,15 @@ export function parseShell(source: string): ParsedShell | undefined {
 			index = end;
 			continue;
 		}
-		if (character === "\"") {
-			let end = index + 1;
+		if (character === "\"" || (character === "$" && source[index + 1] === "\"")) {
+			let end = character === "$" ? index + 2 : index + 1;
 			for (; end < source.length && source[end] !== "\""; end++) {
 				const inner = source[end]!;
 				if (inner === "\\" && end + 1 < source.length && "\"\\$`\n".includes(source[end + 1]!)) {
 					if (source[end + 1] !== "\n") word += source[end + 1];
 					end++;
 				} else {
-					if (inner === "`" || (inner === "$" && source[end + 1] === "(")) opaque = true;
+					if (inner === "`" || (inner === "$" && (source[end + 1] === "(" || source[end + 1] === "{"))) opaque = true;
 					word += inner;
 				}
 			}
@@ -99,21 +112,20 @@ export function parseShell(source: string): ParsedShell | undefined {
 			index = end < 0 ? source.length : end - 1;
 			continue;
 		}
-		if (character === "`" || (character === "$" && source[index + 1] === "(")) {
+		if (character === "`" || (character === "$" && (source[index + 1] === "(" || source[index + 1] === "{"))) {
 			opaque = true;
 			word += character;
 			started = true;
 			continue;
 		}
-		const rest = source.slice(index);
-		if (rest.startsWith("<<")) return undefined;
+		if (source.startsWith("<<", index)) return undefined;
 		if ((character === "<" || character === ">") && source[index + 1] === "(") {
 			opaque = true;
 			word += character;
 			started = true;
 			continue;
 		}
-		const redirection = REDIRECTS.find((operator) => rest.startsWith(operator));
+		const redirection = REDIRECTS.find((operator) => source.startsWith(operator, index));
 		if (redirection) {
 			// A word of digits right before it names the descriptor: `2>`.
 			const descriptor = started && /^\d+$/u.test(word) ? word : "";
@@ -127,7 +139,7 @@ export function parseShell(source: string): ParsedShell | undefined {
 			index += redirection.length - 1;
 			continue;
 		}
-		const connector = CONNECTORS.find((operator) => rest.startsWith(operator));
+		const connector = CONNECTORS.find((operator) => source.startsWith(operator, index));
 		if (connector) {
 			if (!connect()) return undefined;
 			index += connector.length - 1;
@@ -190,10 +202,17 @@ function sedScripts(args: readonly string[]): string[] | undefined {
 	return scripts;
 }
 
+const SED_ADDRESS = /^\s*(?:\d+|\$|\/(?:\\.|[^\\/])*\/)\s*(?:[,~]\s*(?:[+~]?\d+|\$|\/(?:\\.|[^\\/])*\/))?\s*!?\s*/u;
+
 /** Whether one sed command writes a file or runs one: `w`, `W`, `e`, or an `s` with the w or e flag. */
 function sedCommandWrites(command: string): boolean {
-	// Past the address: line numbers, `$`, `/regex/` ranges, and `!`.
-	const body = command.replace(/^\s*(?:(?:\d+|\$|\/(?:\\.|[^/])*\/)\s*(?:[,~]\s*(?:\d+|\$|\/(?:\\.|[^/])*\/))?\s*!?\s*)?/u, "");
+	// Past the address and grouping braces: line numbers, `$`, `/regex/` ranges, stepped `+N`, and `!`.
+	let body = command.trimStart();
+	while (true) {
+		const next = body.replace(/^(?:\{\s*)+/u, "").replace(SED_ADDRESS, "");
+		if (next === body) break;
+		body = next;
+	}
 	const verb = body[0];
 	if (verb === "w" || verb === "W" || verb === "e") return true;
 	if (verb !== "s" || body.length < 2) return false;
@@ -218,17 +237,46 @@ function sedWrites(args: readonly string[]): boolean {
 
 /** awk can print into files and pipes and run commands; a program it reads from a file cannot be checked. */
 function awkWrites(args: readonly string[]): boolean {
-	let program: string | undefined;
+	const programs: string[] = [];
+	const operands: string[] = [];
 	for (let index = 0; index < args.length; index++) {
 		const arg = args[index]!;
-		if (arg === "-f" || arg.startsWith("--file")) return true;
-		if (arg === "-v" || arg === "-F") index++;
-		else if (!arg.startsWith("-")) {
-			program = arg;
-			break;
+		if (
+			shortFlag(arg, "f")
+			|| shortFlag(arg, "i")
+			|| shortFlag(arg, "o")
+			|| shortFlag(arg, "l")
+			|| arg.startsWith("--file")
+			|| arg.startsWith("--include")
+			|| arg.startsWith("--load")
+			|| arg.startsWith("--pretty-print")
+			|| arg.startsWith("--profile")
+			|| arg.startsWith("--dump-variables")
+		) {
+			return true;
+		}
+		if (arg === "--source") {
+			programs.push(args[++index] ?? "");
+		} else if (arg.startsWith("--source=")) {
+			programs.push(arg.slice("--source=".length));
+		} else if (/^-[^-]/u.test(arg)) {
+			for (let position = 1; position < arg.length; position++) {
+				const letter = arg[position]!;
+				if (letter === "e") {
+					programs.push(position + 1 < arg.length ? arg.slice(position + 1) : args[++index] ?? "");
+					break;
+				}
+				if (letter === "v" || letter === "F" || letter === "W") {
+					if (position + 1 >= arg.length) index++;
+					break;
+				}
+			}
+		} else if (!arg.startsWith("-")) {
+			operands.push(arg);
 		}
 	}
-	return program === undefined || /system\s*\(|[|>]/u.test(program);
+	if (programs.length === 0 && operands[0] !== undefined) programs.push(operands[0]);
+	return programs.length === 0 || programs.some((program) => /system\s*\(|[|>]/u.test(program));
 }
 
 /** An option given alone or with its value attached: `--pager`, `--pager=less`. */
@@ -246,9 +294,9 @@ export function writesOrRuns(words: readonly string[]): boolean {
 	const [program, ...args] = words;
 	switch (program) {
 		case "git": {
-			// `git grep -O` opens its matches in a pager it runs; an option before the subcommand can set one.
+			// `git grep -O` opens its matches in a pager it runs; any other subcommand or leading option is not a pure grep.
 			const [sub, ...rest] = args;
-			if (sub !== "grep") return sub?.startsWith("-") === true;
+			if (sub !== "grep") return true;
 			return rest.some((arg) => /^-[^-]*O/u.test(arg)) || hasOption(rest, "--open-files-in-pager");
 		}
 		case "ag": case "ack": case "pt": case "bat": case "batcat":

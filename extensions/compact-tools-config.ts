@@ -12,6 +12,9 @@ import {
 } from "./compact-tools-types.ts";
 
 const CONFIG_FILE = "compact-tools.json";
+const ROOT_KEYS = new Set(["$schema", "style", "mode", "tools", "custom_tools"]);
+const CUSTOM_TOOLS_KEYS = new Set(["enabled", "exclude"]);
+const warnedMessages = new Set<string>();
 type JsonObject = Record<string, unknown>;
 
 export const DEFAULT_CONFIG: CompactToolsConfig = {
@@ -29,16 +32,19 @@ function isObject(value: unknown): value is JsonObject {
 }
 
 function warn(path: string, message: string): void {
-	console.error(`[compact-tools] ${path}: ${message}`);
+	const formatted = `[compact-tools] ${path}: ${message}`;
+	if (warnedMessages.has(formatted)) return;
+	warnedMessages.add(formatted);
+	console.error(formatted);
 }
 
-function parseChoice<T extends string>(value: unknown, choices: readonly T[], key: string, path: string): T | undefined {
+function parseChoice<T extends string>(value: unknown, choices: readonly T[], key: string, path?: string): T | undefined {
 	if ((choices as readonly unknown[]).includes(value)) return value as T;
-	warn(path, `${key} must be one of ${choices.join(", ")}; using previous value`);
+	if (path !== undefined) warn(path, `${key} must be one of ${choices.join(", ")}; using previous value`);
 	return undefined;
 }
 
-function parseStyle(value: unknown, path: string): DisplayStyle | undefined {
+export function parseStyle(value: unknown, path?: string): DisplayStyle | undefined {
 	if (value === "compact" || value === "codex") return "claude";
 	return parseChoice<DisplayStyle>(value, DISPLAY_STYLES, "style", path);
 }
@@ -69,6 +75,8 @@ function parseCustomTools(
 		warn(path, "custom_tools must be true, false, or an object; using previous values");
 		return base;
 	}
+	const unknown = Object.keys(value).filter((key) => !CUSTOM_TOOLS_KEYS.has(key));
+	if (unknown.length > 0) warn(path, `ignoring unknown custom_tools keys: ${unknown.join(", ")}`);
 	const result = { ...base };
 	if (value.enabled !== undefined) {
 		if (typeof value.enabled === "boolean") result.enabled = value.enabled;
@@ -90,6 +98,8 @@ export function mergeConfig(base: CompactToolsConfig, value: unknown, path: stri
 		warn(path, "expected a JSON object; using previous values");
 		return base;
 	}
+	const unknown = Object.keys(value).filter((key) => !ROOT_KEYS.has(key));
+	if (unknown.length > 0) warn(path, `ignoring unknown keys: ${unknown.join(", ")}`);
 	const mode = value.mode === undefined ? base.mode : (parseChoice<DisplayMode>(value.mode, DISPLAY_MODES, "mode", path) ?? base.mode);
 	const style = value.style === undefined ? base.style : (parseStyle(value.style, path) ?? base.style);
 	const tools = value.tools === undefined ? base.tools : (parseTools(value.tools, path) ?? base.tools);

@@ -41,6 +41,7 @@ export type RenderOverride = (component: any, width: number, render: Render) => 
 
 type AssistantLike = {
 	hasToolCalls?: unknown;
+	lastMessage?: { stopReason?: string };
 	contentContainer?: { children?: unknown[] };
 };
 
@@ -62,8 +63,13 @@ function sharedState(): SilentState {
  * the same classes, so a matching name identifies them there.
  */
 export function isKind(child: unknown, kind: abstract new (...args: any[]) => unknown): boolean {
-	return child instanceof kind
-		|| (typeof child === "object" && child !== null && child.constructor?.name === kind.name);
+	if (child instanceof kind) return true;
+	if (typeof child !== "object" || child === null) return false;
+	if ((child as { constructor?: { name?: string } }).constructor?.name === kind.name) return true;
+	for (let proto = Object.getPrototypeOf(child); proto !== null; proto = Object.getPrototypeOf(proto)) {
+		if (proto.constructor?.name === kind.name) return true;
+	}
+	return false;
 }
 
 /** Whether silent mode is currently hiding the transcript's tool rows. */
@@ -72,8 +78,14 @@ export function isSilent(): boolean {
 	return state.active && state.enabled;
 }
 
-/** A turn that hands off to tools is progress, not an answer, however it ended. */
+function hasAbnormalStop(component: AssistantLike): boolean {
+	const stopReason = component.lastMessage?.stopReason;
+	return stopReason === "error" || stopReason === "aborted" || stopReason === "length";
+}
+
+/** A turn that hands off to tools is progress, not an answer, unless it stopped abnormally. */
 export function isIntermediateAssistant(component: AssistantLike): boolean {
+	if (hasAbnormalStop(component)) return false;
 	return component.hasToolCalls === true;
 }
 
@@ -89,8 +101,11 @@ export function renderAnswerOnly(component: AssistantLike, width: number, render
 	const container = component.contentContainer;
 	const children = container?.children;
 	if (!container || !Array.isArray(children)) return render(width);
+	const isAbnormalStop = hasAbnormalStop(component);
 	// Most renders have nothing to drop; skip building a filtered copy for them.
-	if (!children.some((child) => isKind(child, MouseRegion) || isKind(child, Text))) return render(width);
+	if (!children.some((child) => isKind(child, MouseRegion) || (!isAbnormalStop && isKind(child, Text)))) {
+		return render(width);
+	}
 	const kept: unknown[] = [];
 	let afterThinking = false;
 	for (const child of children) {
@@ -103,7 +118,7 @@ export function renderAnswerOnly(component: AssistantLike, width: number, render
 			continue;
 		}
 		afterThinking = false;
-		if (isKind(child, Text)) {
+		if (!isAbnormalStop && isKind(child, Text)) {
 			if (isKind(kept.at(-1), Spacer)) kept.pop();
 			continue;
 		}
@@ -289,22 +304,26 @@ export class SilentModeController {
 					ctx.ui.notify("Usage: /silent [on|off]", "warning");
 					return;
 				}
-				this.choose(enabled);
+				this.choose(enabled, ctx);
 			},
 		});
 		pi.registerShortcut(SILENT_SHORTCUT, {
 			description: "Toggle silent mode",
-			handler: () => this.choose(!sharedState().enabled),
+			handler: (ctx) => this.choose(!sharedState().enabled, ctx),
 		});
 	}
 
 	/** A choice made in the session, which a /reload keeps over the configured mode. */
-	private choose(enabled: boolean): void {
+	private choose(enabled: boolean, ctx?: ExtensionContext): void {
 		sharedState().overridden = true;
-		// No notification: Pi writes notices into the transcript, which is exactly
-		// what silent mode keeps clean.
+		// No notification when active: Pi writes notices into the transcript, which
+		// is what silent mode keeps clean.
 		this.apply(enabled);
-		if (!sharedState().enabled && this.context) this.onVisible?.(this.context);
+		if (!this.context) {
+			ctx?.ui.notify("Silent mode preference saved (activate /compact-tools claude to apply).", "info");
+			return;
+		}
+		if (!sharedState().enabled) this.onVisible?.(this.context);
 	}
 
 	isEnabled(): boolean {

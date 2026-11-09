@@ -151,6 +151,7 @@ export function attachActivityToUserMessage(lines: string[], activity: string): 
 
 interface ActivityState {
 	active: boolean;
+	alignBottom: boolean;
 	frame: number;
 	level?: ThinkingLevel;
 	theme?: Theme;
@@ -162,7 +163,7 @@ interface ActivityState {
 
 function sharedActivityState(): ActivityState {
 	const holder = globalThis as typeof globalThis & { [ACTIVITY_STATE]?: ActivityState };
-	holder[ACTIVITY_STATE] ??= { active: false, frame: 0 };
+	holder[ACTIVITY_STATE] ??= { active: false, alignBottom: false, frame: 0 };
 	return holder[ACTIVITY_STATE];
 }
 
@@ -179,7 +180,8 @@ function patchTranscriptAlignment(tui: TUI): void {
 	if (!document) return;
 	hookMethod(document, "render", "activity.transcriptRender", (self, args, original) => {
 		const lines: string[] = original.apply(self, args);
-		if (!sharedActivityState().active) return lines;
+		const state = sharedActivityState();
+		if (!state.active && !state.alignBottom) return lines;
 		const height = scroll?.viewportHeight;
 		return typeof height === "number" ? bottomAlignTranscript(lines, height) : lines;
 	}, [LEGACY_TRANSCRIPT_RENDER]);
@@ -214,7 +216,7 @@ function patchEditorGap(tui: TUI): void {
 function patchUserMessage(): boolean {
 	const prototype = UserMessageComponent?.prototype;
 	if (!prototype) return false;
-	return hookMethod(prototype, "render", "activity.userRender", (self: UserMessageComponent, args, original) => {
+	return Boolean(hookMethod(prototype, "render", "activity.userRender", (self: UserMessageComponent, args, original) => {
 		const state = sharedActivityState();
 		if (!state.active) return original.apply(self, args);
 		const lines: string[] = original.apply(self, args);
@@ -234,7 +236,7 @@ function patchUserMessage(): boolean {
 		if (state.target !== self || !state.theme) return lines;
 		const width = args[0] as number;
 		return attachActivityToUserMessage(lines, renderActivityDots(state.frame, width, state.theme, state.level)[0] ?? "");
-	}, [LEGACY_USER_RENDER]);
+	}, [LEGACY_USER_RENDER]));
 }
 
 /** Animates beneath the latest submitted prompt during a silent turn. */
@@ -273,15 +275,16 @@ export class SilentActivityAnimator {
 		// working-label controller already does.
 		pi.on("agent_settled", () => {
 			this.running = false;
+			this.answering = false;
 			this.refresh();
 		});
 	}
 
 	bind(ctx: ExtensionContext, resume = false): void {
-		this.hide();
+		this.stop();
 		this.context = ctx;
 		this.running = ctx.isIdle?.() === false;
-		if (!resume) this.answering = false;
+		if (!resume || !this.running) this.answering = false;
 	}
 
 	setEnabled(enabled: boolean): void {
@@ -290,10 +293,11 @@ export class SilentActivityAnimator {
 	}
 
 	dispose(): void {
-		try { this.hide(); }
+		try { this.stop(); }
 		finally {
 			this.context = undefined;
 			this.running = false;
+			this.answering = false;
 			this.enabled = false;
 		}
 	}
@@ -310,41 +314,74 @@ export class SilentActivityAnimator {
 	}
 
 	private refresh(): void {
-		if (this.context && this.enabled && this.running && !this.answering) this.show();
-		else this.hide();
+		if (!this.context || !this.enabled || !this.running) {
+			this.stop();
+			return;
+		}
+		if (this.answering) {
+			this.ensureMounted();
+			this.hideDots();
+		} else {
+			this.show();
+		}
 	}
 
-	private show(): void {
-		if (!this.context || this.mounted || !patchUserMessage()) return;
-		this.frame = 0;
+	private ensureMounted(): boolean {
+		if (!this.context || !patchUserMessage()) return false;
+		const state = sharedActivityState();
+		state.alignBottom = true;
+		state.theme = this.context.ui.theme;
+		if (this.mounted) return true;
 		this.mounted = true;
-		Object.assign(sharedActivityState(), {
-			active: true, frame: 0, level: this.readLevel(), theme: this.context.ui.theme,
-			target: undefined, candidate: undefined,
-		});
-		// This invisible widget provides Pi's TUI for animation repaints.
+		// This invisible widget provides Pi's TUI for animation repaints and transcript alignment.
 		this.context.ui.setWidget(WIDGET_KEY, (tui) => {
 			sharedActivityState().tui = tui;
 			patchTranscriptAlignment(tui);
 			patchEditorGap(tui);
 			return { render: () => [], invalidate() {} };
 		}, { placement: "belowEditor" });
-		// Ticks with the working label, so the two share one repaint per frame, and
-		// frames that look the same as the last one ask for no repaint at all.
-		this.stopTicking = onTick(() => {
-			this.frame++;
-			const state = sharedActivityState();
-			const level = this.readLevel();
-			const changed = frameChanges(this.frame) || level !== state.level;
-			state.frame = this.frame;
-			state.level = level;
-			if (changed) state.tui?.requestRender();
-		});
+		return true;
 	}
 
-	private hide(): void {
+	private show(): void {
+		if (!this.context || !this.ensureMounted()) return;
+		const state = sharedActivityState();
+		if (state.active && this.stopTicking) return;
+		this.frame = 0;
+		Object.assign(state, {
+			active: true, alignBottom: true, frame: 0, level: this.readLevel(), theme: this.context.ui.theme,
+			target: undefined, candidate: undefined,
+		});
+		// Ticks with the working label, so the two share one repaint per frame, and
+		// frames that look the same as the last one ask for no repaint at all.
+		this.stopTicking ??= onTick(() => {
+			this.frame++;
+			const current = sharedActivityState();
+			const level = this.readLevel();
+			const changed = frameChanges(this.frame) || level !== current.level;
+			current.frame = this.frame;
+			current.level = level;
+			if (changed) current.tui?.requestRender();
+		});
+		state.tui?.requestRender();
+	}
+
+	private hideDots(): void {
+		const state = sharedActivityState();
+		const wasActive = state.active;
+		state.active = false;
+		state.alignBottom = true;
+		state.target = undefined;
+		state.candidate = undefined;
+		this.stopTicking?.();
+		this.stopTicking = undefined;
+		if (wasActive) state.tui?.requestRender();
+	}
+
+	private stop(): void {
 		const state = sharedActivityState();
 		state.active = false;
+		state.alignBottom = false;
 		state.tui = undefined;
 		state.target = undefined;
 		state.candidate = undefined;

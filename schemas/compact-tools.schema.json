@@ -11,7 +11,16 @@
     "style": {
       "description": "How tool rows are drawn: claude (Claude Code style with keyword highlighting) or off (Pi's native renderer).",
       "type": "string",
-      "enum": ["claude", "off"],
+      "anyOf": [
+        {
+          "enum": ["claude", "off"]
+        },
+        {
+          "enum": ["compact", "codex"],
+          "deprecated": true,
+          "description": "Legacy style names; automatically resolved to \"claude\"."
+        }
+      ],
       "default": "claude"
     },
     "mode": {
