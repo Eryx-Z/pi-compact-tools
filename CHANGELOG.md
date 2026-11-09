@@ -1,0 +1,199 @@
+# Changelog
+
+## [0.17.0]
+
+### New
+
+- Use Pi 1.5's native Extension Updates changelog, including seen-version tracking and collapseChangelog; older hosts keep the existing release notice.
+- Verify Pi 1.4.0 and 1.5.0 in the release compatibility matrix while preserving the Pi 0.85.1 minimum.
+
+### Fix
+
+- Claude and Codex output expansion hints follow Pi 1.5's injected keybindings, omit unbound actions, and refresh when the configured key changes.
+- Keep renderer context types and test fixtures compatible with both legacy hosts and Pi 1.5's new key hint fields.
+- Generate the shipped CHANGELOG.md from the same release notes used by older hosts and GitHub, and reject stale changelogs before publishing.
+- Bridge existing legacy notice users once on their first native-supported upgrade, including skipped versions, so moving to Pi 1.5's native changelog does not lose the migration release notes.
+
+## [0.16.7]
+
+- Match Claude Code 2.1.312: quiet exploration groups, expanded Read ranges, image labels, streaming Bash tails, and clearer errors.
+- Match Codex CLI 0.165.0: neutral Exited (status N) rows and nonzero-exit summaries, preserving tail previews and transcript expansion.
+
+## [0.16.6]
+
+### Fix
+
+- Correct the SDK smoke test on Pi 0.99–1.1 by checking native codemode timer behavior only on hosts that provide it while retaining live off/on coverage on every supported version.
+- Require the complete supported Pi and Node compatibility matrix to pass before npm publication.
+
+## [0.16.5]
+
+### Fix
+
+- Remove duplicate transcript updates so each tool row refreshes once during session UI binding.
+- Reduce median UI rebind time from 8.89 ms to 4.87 ms in a 200-row component benchmark, without implying full reload or general rendering speedups.
+- Isolate row refresh failures so other rows and controller cleanup continue, with fallback diagnostics if warning delivery fails.
+- Detach controller state despite host cleanup errors to prevent compact animation from restarting while off.
+- Centralize UI cleanup and separate transcript reconciliation from extension setup.
+- Remove unused execution wrappers and state while preserving timing, codemode summaries, and live off/on switching.
+
+## [0.16.4]
+
+### New
+
+- The off command restores native Pi UI immediately, including during streaming or tool execution, without reload, abort, or restart
+- Re-enable Compact, Claude, or Codex live from off; existing rows and calls created while off follow the selected style
+
+### Fix
+
+- Native and custom renderer shells and component caches reconcile across repeated off/on transitions without replacing author state
+- Working labels and silent activity resume the current streaming phase; native shell elapsed timers pause when returning to compact rendering
+
+## [0.16.3]
+
+### New
+
+- Verified on Pi 1.3.0 with its version added to CI; the Pi 0.85.1 minimum is unchanged
+- Tool indicators, the working label, and silent activity share one animation timer, reducing redundant paint boundaries without changing their average animation rates
+
+### Fix
+
+- Replayed read calls with numeric-string offsets retain their correct code line numbers
+- The off command restores Pi's native thinking display as well as tool rows, working indicator, keyboard behavior, and visibility; active themes and session history are unchanged
+
+## [0.16.2]
+
+### New
+
+- A concise README and a separate development guide
+- Seven refreshed real-time demos, including silent mode during work and in resumed sessions
+
+## [0.16.1]
+
+### New
+
+- Minimal codemode summaries show each tool once: read 3 · bash 1 · edit 3 2; non-edit tools keep first-call order and edit always comes last
+- Plain counts use green for success, red for failure, and yellow for unfinished calls, without zero placeholders, count parentheses, status icons, pipes, or edit diff lists
+- Summary names retain their theme title hue at 75% brightness without bold; outcome counts retain their hues at 80% brightness
+- Completion duration and output-line metadata is one step brighter; rails, connectors, separators, main tool titles, and code previews are unchanged
+
+### Fix
+
+- Interleaved nested calls aggregate into one group per tool, with success counts before failure counts
+- Reloads, resumed sessions, and /tree navigation preserve or restore nested counts and outcomes without retaining tool arguments, results, or edit diff bookkeeping
+- Unfinished calls and incomplete records remain visible, including when mixed with settled outcomes
+
+## [0.16.0]
+
+### New
+
+- Completed codemode rows summarize nested tool successes and failures beside their duration and output-line count without changing model input
+- Reloads retain exact live edit diffs; resumed sessions and /tree branches restore saved per-call outcomes without guessing changes
+- Codemode summaries show every edit attempt in order: edit(3) [+10 -3|✗|+5 -7], with no checkmark on successful changes
+- Compact, Claude, and Codex show the first three edit attempts when collapsed and every recorded attempt when expanded
+- Diff separators are dim and have no surrounding whitespace; additions and removals retain their diff colors
+
+### Fix
+
+- Updated the GitHub Dark theme and theme fixtures to Pi 1.2's published schema; validated both startup and reload resource loading
+- Verified on Pi 1.2.0 while preserving the Pi 0.85.1 minimum and the existing 0.15.0 word-diff and platform key-label features
+- Per-call edit diffs keep first-call order even when nested calls finish out of order
+- Claude and Codex keep codemode output, an indented completion summary without a separate branch marker, and the disclosure in that order
+- Failed and unfinished edit attempts remain visible in previews, including omitted-attempt status counts
+- A missing successful edit diff shows ok for that call without hiding other calls’ known changes or guessing totals
+
+## [0.15.0]
+
+### New
+
+- Claude style now marks the changed words in an edit diff, like Claude Code 2.1.296: a removed line and the added line that replaces it get a brighter tint on the words that differ. Lines that are mostly rewritten are left alone
+- Codex style spells the expand key the way Codex 0.162 does: `⌃o` on macOS, `^o` on Linux, `ctrl+o` elsewhere
+
+### Fix
+
+- Line numbers in edit diffs and Write previews moved one column right and lost one trailing space, matching Claude Code 2.1.296. Code stays in the same column
+
+## [0.14.2]
+
+### New
+
+- Supports Pi 1.1 recorded execution durations and output padding when those fields are available
+
+### Fix
+
+- Restored Compact and expanded Codex rows retain their recorded execution time, including zero-duration calls
+- Final host-recorded durations stay accurate when the system clock changes
+- Tool rows and folded groups honor outputPad without changing their internal style indentation
+- Embedded third-party renderers do not receive a duplicate outer margin
+- Preserves existing timing and margins on older Pi versions; the minimum supported version remains Pi 0.85.1
+
+## [0.14.1]
+
+### Fix
+
+- Fixed unintended input-token overhead: compact rendering no longer registers or activates tools that Pi would otherwise leave inactive
+- Preserves Pi’s tool execution settings and other extensions’ tool definitions and renderers
+- Fixed tool rows not updating correctly after reloads or trusted-project style changes
+- Uses Pi’s native renderer API on Pi 1.0.2 and later, including compact HTML exports
+- Supports Pi 0.85.1 and later; Pi 1.0.2 or later is recommended. On earlier Pi versions, HTML exports use Pi’s default renderers
+
+## [0.14.0]
+
+### New
+
+- Codex style added.
+- `/compact-tools` command added. Try `/compact-tools codex`.
+
+### Fix
+
+- Commands that write or run something, such as `tee`, `xargs`, or `find -delete`, keep their own row instead of folding into a group
+- `/compact-tools codex` without a scope saves where the style is decided, so a switch always takes effect
+- `/compact-tools` and `/silent` run on the first Enter
+- A trusted project's tools apply right after a style switch
+- Fixes for narrow panes, long error messages, and pipelines in Compact summaries
+
+## [0.13.2]
+
+- Verified on Pi 1.0.0 while keeping compatibility with Pi 0.85.1 and later
+- Silent activity keeps animating through retries and follow-up turns until final settlement
+- Hidden file results defer syntax highlighting until their code is actually shown
+- Completed tool results repaint correctly when the theme changes
+- Large file views render without exceeding JavaScript argument limits
+- Fullscreen viewport anchoring and code-row layout allocate less work
+- Execution timing history stays bounded even when tool rows are not drawn
+
+## [0.13.0]
+
+- Follows Pi 0.99's system theme and light terminals: rails, dots, and the working label take their colors from the theme itself
+- Running dots, rails, and silent mode's activity line are painted once per theme instead of every frame
+- The working label repaints when the theme changes, including when the terminal switches between dark and light
+- Tools a codemode script calls leave nothing behind in the rows' timings
+- Silent mode hides compaction and branch summaries that Pi writes mid-turn
+
+## [0.12.0]
+
+- Running rows animate without being rebuilt: one repaint per frame, however many tools run
+- A tool's time counts from when it runs, not from when the model began writing its call
+- Rows restored from a session show no made-up time, and a call left without a result waits instead of pulsing on
+- Claude style: groups draw about ten times faster in long sessions, and wait along with their calls
+- Silent mode's activity line follows a theme switch
+
+## [0.11.2]
+
+- Claude style no longer cuts commands to one row; long ones wrap, and only past two lines or 160 characters are shortened
+
+## [0.11.0]
+
+- Claude style: set "style": "claude" to see tool calls the way Claude Code shows them
+- Reads, searches, and listings fold into one line; Bash, Update, and Write keep their own rows
+- "style": "off" leaves Pi's own tool rows; silent mode stays "mode": "silent"
+- Edit diffs no longer show a gap marker twice
+
+## [0.10.0]
+
+- Silent mode shows only prompts and final answers (Ctrl+' or /silent)
+- Tools from other packages get the same compact rows as the built-ins
+- Edits show the lines they added and removed, in the diff colors
+- Thinking summaries are shown in full instead of cut off
+- Fullscreen scrolling stays in place when expanding rows or cycling thinking
+- Failed rows show a short reason while their output is hidden

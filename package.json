@@ -1,0 +1,49 @@
+{
+  "name": "pi-compact-tools",
+  "version": "0.18.0",
+  "description": "Claude-style tool rows for Pi with shell/output keyword highlighting, silent mode, and high-contrast chrome.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Eryx-Z (forked from Dong Hyeong Lee)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Eryx-Z/pi-compact-tools.git"
+  },
+  "homepage": "https://github.com/Eryx-Z/pi-compact-tools#readme",
+  "bugs": {
+    "url": "https://github.com/Eryx-Z/pi-compact-tools/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-coding-agent",
+    "pi-extension",
+    "claude-code",
+    "terminal-ui",
+    "theme"
+  ],
+  "files": [
+    "extensions",
+    "themes",
+    "examples",
+    "schemas",
+    "release-notes.json",
+    "CHANGELOG.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/compact-tools.ts"
+    ],
+    "themes": [
+      "./themes/github-dark-pro.json"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.85.1",
+    "@earendil-works/pi-tui": ">=0.85.1"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

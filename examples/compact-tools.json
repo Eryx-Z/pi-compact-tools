@@ -1,0 +1,5 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Eryx-Z/pi-compact-tools/main/schemas/compact-tools.schema.json",
+  "style": "claude",
+  "mode": "normal"
+}

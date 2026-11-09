@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Eryx-Z/pi-compact-tools/main/schemas/compact-tools.schema.json",
+  "title": "pi-compact-tools configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "style": {
+      "description": "How tool rows are drawn: claude (Claude Code style with keyword highlighting) or off (Pi's native renderer).",
+      "type": "string",
+      "enum": ["claude", "off"],
+      "default": "claude"
+    },
+    "mode": {
+      "description": "Display mode: normal shows tool rows; silent hides tool rows and intermediate turns while keeping the activity indicator.",
+      "type": "string",
+      "enum": ["normal", "silent"],
+      "default": "normal"
+    },
+    "tools": {
+      "description": "Built-in tools that use Claude rendering.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["read", "write", "edit", "bash", "powershell", "grep", "find", "ls"]
+      },
+      "uniqueItems": true,
+      "default": ["read", "write", "edit", "bash"]
+    },
+    "custom_tools": {
+      "description": "Render tools registered by other extensions in Claude style.",
+      "oneOf": [
+        { "type": "boolean" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "exclude": {
+              "type": "array",
+              "items": { "type": "string" },
+              "uniqueItems": true,
+              "default": []
+            }
+          }
+        }
+      ],
+      "default": { "enabled": true, "exclude": [] }
+    }
+  }
+}
